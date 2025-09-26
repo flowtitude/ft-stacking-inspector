@@ -1,0 +1,33 @@
+{
+    "name": "FT Stacking Inspector (MVP)",
+    "slug": "ft-stacking-inspector",
+    "version": "0.1.0",
+    "description": "Panel flotante para inspeccionar y ajustar en vivo el stacking y z-index/order. Atajo Alt+Z. Solo visible para usuarios con permisos de edición.",
+    "scope": "frontend",
+    "wordpress": "6.4",
+    "tested": "6.6",
+    "requires": {
+      "php": "7.4",
+      "plugins": []
+    },
+    "compat": {
+      "bricks": "1.9+",
+      "woocommerce": "8.5+",
+      "windpress": "4.1+"
+    },
+    "tags": ["debug","ux","stacking","z-index","flex","grid","inspector"],
+    "risk": "low",
+    "status": "beta",
+    "links": {
+      "docs": "",
+      "gist": "",
+      "issue": ""
+    },
+    "author": {
+      "name": "Ángel Julián (Flowtitude)",
+      "url": "https://tusitio.com",
+      "credit": ""
+    },
+    "notes": "Se activa con Alt+Z. Restringido a usuarios logueados con capacidad de edición."
+  }
+  
