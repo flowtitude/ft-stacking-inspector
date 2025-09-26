@@ -1,17 +1,16 @@
 <?php
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
- * Description: Panel flotante para inspeccionar y ajustar en vivo el orden de apilamiento (stacking) y z-index/order. Toggle: Alt+Z.
- * Version:     0.1.0
+ * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
+ * Version:     0.1.1
  * Author:      Flowtitude
- * License:     GPL-2.0-or-later
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 add_action('wp_enqueue_scripts', function () {
-	// Solo usuarios logueados con permiso de edición (evita exposición pública).
-	if ( ! is_user_logged_in() || ! current_user_can('edit_posts') ) return;
+	// Solo usuarios logueados con permiso de edición, en el FRONT.
+	if ( ! is_user_logged_in() || ! current_user_can('edit_posts') || is_admin() ) return;
 
 	$handle = 'ft-stacking-inspector';
 	wp_register_script($handle, '', [], false, true);
@@ -20,20 +19,20 @@ add_action('wp_enqueue_scripts', function () {
 (() => {
 	/* ===========================
 	   FT STACKING INSPECTOR (MVP)
-	   Toggle: Alt+Z
+	   Toggle: Alt/Option + Z (fix Mac: usar e.code === 'KeyZ')
 	=========================== */
 
 	const STATE = {
 		enabled: false,
 		tree: null,
-		currentTab: 'stack', // 'stack' | 'dom'
+		currentTab: 'stack',
 		highlights: new Set(),
-		mods: new Map(), // element => { zIndex?, order? }
+		mods: new Map(),
 	};
 
 	const STYLE = `
 	.ftsi-root{position:fixed;inset:auto 16px 16px auto;z-index:2147483646;font:13px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111}
-	.ftsi-card{width:380px;max-height:70vh;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);overflow:hidden}
+	.ftsi-card{width:440px;max-height:70vh;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);overflow:hidden}
 	.ftsi-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #f1f5f9;background:#f8fafc}
 	.ftsi-title{font-weight:600}
 	.ftsi-actions{display:flex;gap:8px}
@@ -43,7 +42,7 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-row{display:flex;gap:8px;align-items:center}
 	.ftsi-search{flex:1;padding:6px 8px;border:1px solid #e5e7eb;border-radius:8px}
 	.ftsi-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
-	.ftsi-item{border:1px solid #e5e7eb;border-radius:8px;padding:8px}
+	.ftsi-item{border:1px solid #e5e7eb;border-radius:8px;padding:8px;background:#fff}
 	.ftsi-item .ftsi-top{display:flex;justify-content:space-between;gap:8px}
 	.ftsi-badges{display:flex;gap:6px;flex-wrap:wrap}
 	.ftsi-badge{border:1px solid #e5e7eb;border-radius:999px;padding:2px 6px;font-size:11px;background:#f8fafc}
@@ -55,26 +54,34 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-highlight{position:absolute;pointer-events:none;border:2px solid #14b8a6;box-shadow:0 0 0 2px rgba(20,184,166,.25) inset;z-index:2147483645}
 	.ftsi-footer{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-top:1px solid #f1f5f9;background:#fafafa}
 	.ftsi-link{color:#0369a1;text-decoration:none}
+
+	/* Botón lanzador fijo */
+	.ftsi-launch{position:fixed;right:16px;bottom:16px;z-index:2147483646}
+	.ftsi-launch .ftsi-btn{font-weight:600}
 	`;
 
-	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn;
+	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $launch;
 
 	function ensureUI(){
 		if($root) return;
+
+		// Estilos
 		const style = document.createElement('style');
 		style.textContent = STYLE;
 		document.documentElement.appendChild(style);
 
+		// Panel
 		$root = document.createElement('div');
 		$root.className = 'ftsi-root';
+		$root.style.display = 'none';
 		$root.innerHTML = `
 			<div class="ftsi-card" role="dialog" aria-label="FT Stacking Inspector" aria-modal="false">
 				<div class="ftsi-head">
-					<div class="ftsi-title">FT Stacking Inspector</div>
+					<div class="ftsi-title">Flowtitude Stacking Inspector</div>
 					<div class="ftsi-actions">
 						<button class="ftsi-btn" data-tab="stack" aria-pressed="true" title="Orden de pintura / stacking">Stack</button>
 						<button class="ftsi-btn" data-tab="dom" aria-pressed="false" title="Orden del DOM">DOM</button>
-						<button class="ftsi-btn" data-action="close" title="Ocultar (Alt+Z)">✕</button>
+						<button class="ftsi-btn" data-action="close" title="Ocultar (Alt/Option+Z)">✕</button>
 					</div>
 				</div>
 				<div class="ftsi-body">
@@ -91,6 +98,13 @@ add_action('wp_enqueue_scripts', function () {
 			</div>
 		`;
 		document.body.appendChild($root);
+
+		// Lanzador fijo por si el atajo falla
+		$launch = document.createElement('div');
+		$launch.className = 'ftsi-launch';
+		$launch.innerHTML = `<button class="ftsi-btn" title="Abrir FT Stacking (Alt/Option+Z)">Flowtitude Stacking</button>`;
+		document.body.appendChild($launch);
+
 		$card = $root.querySelector('.ftsi-card');
 		$list = $root.querySelector('[data-list]');
 		$search = $root.querySelector('.ftsi-search');
@@ -116,29 +130,35 @@ add_action('wp_enqueue_scripts', function () {
 			}
 		});
 		$search.addEventListener('input', ()=>render());
+		$launch.addEventListener('click', ()=>toggle(true));
 	}
 
 	function toggle(on){
 		STATE.enabled = (on ?? !STATE.enabled);
+		ensureUI();
 		if(STATE.enabled){
-			ensureUI();
 			$root.style.display = '';
 			build();
 		}else{
-			if($root) $root.style.display = 'none';
+			$root.style.display = 'none';
 			clearHighlights();
 		}
 	}
 
-	// Keyboard toggle Alt+Z
+	// Atajo: Alt/Option + Z (fix Mac layouts que devuelven Ω con Option)
 	window.addEventListener('keydown', (e)=>{
-		if(e.altKey && (e.key === 'z' || e.key === 'Z')) {
+		// Usamos e.code para garantizar la tecla física Z.
+		if (e.altKey && (e.code === 'KeyZ' || (typeof e.key === 'string' && e.key.toLowerCase() === 'z'))) {
 			e.preventDefault();
 			toggle();
 		}
 	},{capture:true});
 
-	// Build data
+	// API global mínima por si quieres abrir desde consola
+	window.ftsiOpen = ()=>toggle(true);
+	window.ftsiClose = ()=>toggle(false);
+
+	// ====== Lógica de análisis (igual que versión previa) ======
 	function build(){
 		const fn = ()=> {
 			STATE.tree = analyze();
@@ -168,7 +188,6 @@ add_action('wp_enqueue_scripts', function () {
 	}
 
 	function createsStackingContext(el, cs){
-		// Simplificación práctica de reglas MDN
 		if(el === document.documentElement) return true;
 		if(cs.position !== 'static' && cs.zIndex !== 'auto') return true;
 		if(parseFloat(cs.opacity) < 1) return true;
@@ -199,10 +218,8 @@ add_action('wp_enqueue_scripts', function () {
 		return cs.display.includes('grid');
 	}
 
-	// Construye árbol de contextos y lista de nodos en orden de pintado aproximado.
 	function analyze(){
 		const all = Array.from(document.body.querySelectorAll('*')).filter(isElementVisible);
-		// mapa de contexto -> hijos
 		const ctxRoot = { el: document.documentElement, children: [], nodes: [], parent: null, label: 'root<html>' };
 		const contextMap = new Map([[document.documentElement, ctxRoot]]);
 
@@ -212,12 +229,10 @@ add_action('wp_enqueue_scripts', function () {
 				if(contextMap.has(p)) return contextMap.get(p);
 				const cs = getComputedStyle(p);
 				if(createsStackingContext(p, cs)){
-					// asegurar existencia
 					if(!contextMap.has(p)){
 						const node = { el: p, children: [], nodes: [], parent: null, label: shortSelector(p) };
 						contextMap.set(p, node);
-						// vincular a su contexto padre (recursivo)
-						const gp = contextOf(p); // esto asegura chain
+						const gp = contextOf(p);
 						node.parent = gp;
 						gp.children.push(node);
 					}
@@ -228,7 +243,6 @@ add_action('wp_enqueue_scripts', function () {
 			return ctxRoot;
 		}
 
-		// Asegurar contexts para todos los que crean stacking
 		for(const el of all){
 			const cs = getComputedStyle(el);
 			if(createsStackingContext(el, cs) && !contextMap.has(el)){
@@ -239,7 +253,6 @@ add_action('wp_enqueue_scripts', function () {
 				parentCtx.children.push(node);
 			}
 		}
-		// Asignar cada elemento a su contexto
 		for(const el of all){
 			const ctx = contextOf(el);
 			const cs = getComputedStyle(el);
@@ -255,7 +268,6 @@ add_action('wp_enqueue_scripts', function () {
 			});
 		}
 
-		// Orden aproximado de pintado por contexto: negativo z < auto < positivo z
 		function sortByPaint(list){
 			const neg = [], auto = [], pos = [];
 			for(const n of list){
@@ -264,14 +276,12 @@ add_action('wp_enqueue_scripts', function () {
 				else pos.push(n);
 			}
 			neg.sort((a,b)=>a.zIndex-b.zIndex);
-			// auto conserva orden DOM relativo (ya viene así)
 			pos.sort((a,b)=>a.zIndex-b.zIndex);
 			return [...neg, ...auto, ...pos];
 		}
 		function annotateDOMOrder(nodes){
 			nodes.forEach((n,i)=> n.domIndex = i);
 		}
-		// DOM order global para filtro DOM
 		const domNodes = all.map((el,i)=>{
 			const cs = getComputedStyle(el);
 			return {
@@ -286,7 +296,6 @@ add_action('wp_enqueue_scripts', function () {
 			};
 		});
 
-		// Ordenar nodos por contexto (pintado)
 		function walk(ctx){
 			annotateDOMOrder(ctx.nodes);
 			ctx.nodes = sortByPaint(ctx.nodes);
@@ -305,10 +314,8 @@ add_action('wp_enqueue_scripts', function () {
 		if(STATE.currentTab === 'dom'){
 			items = STATE.tree.domNodes.slice();
 		}else{
-			// aplanar por contexto en el orden de pintado
 			const out = [];
 			(function walk(ctx, depth=0){
-				// context marker
 				out.push({ctx, depth, isCtx:true});
 				ctx.nodes.forEach(n=> out.push({ ...n, depth, isCtx:false }));
 				ctx.children.forEach(c=> walk(c, depth+1));
@@ -324,7 +331,9 @@ add_action('wp_enqueue_scripts', function () {
 			});
 		}
 
-		$count.textContent = String(items.filter(i=>!i.isCtx).length);
+		const count = items.filter(i=>!i.isCtx).length;
+		const $count = document.querySelector('[data-count]');
+		if($count) $count.textContent = String(count);
 
 		for(const it of items){
 			if(it.isCtx){
@@ -363,7 +372,7 @@ add_action('wp_enqueue_scripts', function () {
 					<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(it.zIndex)? it.zIndex : ''}" data-act="z" />
 					<button class="ftsi-btn" data-act="z-1">z–</button>
 					<button class="ftsi-btn" data-act="z+1">z+</button>
-					${it.isFlexItem || it.isGridItem ? `
+					${(it.isFlexItem || it.isGridItem) ? `
 						<input type="number" step="1" placeholder="order" value="${getComputedStyle(it.el).order || ''}" data-act="order" />
 						<button class="ftsi-btn" data-act="o-1">o–</button>
 						<button class="ftsi-btn" data-act="o+1">o+</button>
@@ -373,7 +382,6 @@ add_action('wp_enqueue_scripts', function () {
 				</div>
 				<div class="ftsi-small ftsi-muted">opacity:${it.opacity}</div>
 			`;
-			// bind
 			li.addEventListener('click', (e)=>{
 				const btn = e.target.closest('button, input');
 				if(!btn) return;
@@ -404,7 +412,7 @@ add_action('wp_enqueue_scripts', function () {
 		el.style.setProperty('z-index', String(v), 'important');
 		STATE.mods.set(el, { ...(STATE.mods.get(el)||{}), zIndex: { prev, now: v } });
 	}
-	function bumpZ(el, delta){ 
+	function bumpZ(el, delta){
 		const cs = getComputedStyle(el);
 		const curr = cs.zIndex === 'auto' ? 0 : Number(cs.zIndex)||0;
 		setZ(el, curr + delta);
@@ -435,13 +443,11 @@ add_action('wp_enqueue_scripts', function () {
 			height: r.height + 'px',
 			display: 'block'
 		});
-		STATE.highlights.add(el);
 		setTimeout(()=> { if(overlay) overlay.style.display='none'; }, 1200);
 	}
 
 	function clearHighlights(){
 		if(overlay) overlay.style.display = 'none';
-		STATE.highlights.clear();
 	}
 
 	function resetOne(el){
@@ -459,8 +465,7 @@ add_action('wp_enqueue_scripts', function () {
 		build();
 	}
 
-	// Autostart disabled; toggle with Alt+Z
-	console.info('[FT] Stacking Inspector listo. Pulsa Alt+Z para abrir.');
+	console.info('[FT] Stacking Inspector listo. Pulsa Alt/Option+Z o el botón “FT Stacking”.');
 })();
 JS;
 
