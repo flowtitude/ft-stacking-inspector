@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.5
+ * Version:     0.1.6
  * Author:      Flowtitude
  */
 
@@ -65,6 +65,9 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-breadcrumb-item:hover{color:#1d4ed8}
 	.ftsi-breadcrumb-separator{color:#9ca3af}
 	.ftsi-filter-info{font-size:11px;color:#64748b;margin-bottom:8px}
+	.ftsi-paint-order{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;margin-left:4px}
+	.ftsi-paint-order.high{background:#fef3c7;color:#92400e;border-color:#fde68a}
+	.ftsi-paint-order.low{background:#f3e8ff;color:#7c3aed;border-color:#ddd6fe}
 	`;
 
 	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $breadcrumb, $filterInfo, $showAllBtn;
@@ -365,7 +368,10 @@ add_action('wp_enqueue_scripts', function () {
 		}
 		walk(ctxRoot);
 
-		return { root: ctxRoot, domNodes };
+		// Calcular orden de pintura global
+		const paintOrder = calculatePaintOrder(ctxRoot);
+
+		return { root: ctxRoot, domNodes, paintOrder };
 	}
 
 	function render(){
@@ -471,10 +477,15 @@ add_action('wp_enqueue_scripts', function () {
 			if(isGridContainer(it.el)) bad.push('grid-container');
 
 			const selectorParts = getSelectorParts(it.el);
+			const paintInfo = STATE.tree.paintOrder.get(it.el);
+			const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
 
 			li.innerHTML = `
 				<div class="ftsi-top">
-					<div class="ftsi-selector">${selectorParts.main}</div>
+					<div class="ftsi-selector">
+						${selectorParts.main}
+						${paintInfo ? `<span class="ftsi-paint-order ${paintOrderClass}" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
+					</div>
 					${selectorParts.extra ? `<div class="ftsi-classes">${selectorParts.extra}</div>` : ''}
 					<span class="ftsi-badges">
 						<span class="ftsi-badge">z:${it.zIndex}</span>
@@ -493,7 +504,11 @@ add_action('wp_enqueue_scripts', function () {
 					<button class="ftsi-btn" data-act="focus">Enfocar</button>
 					<button class="ftsi-btn" data-act="reset">Reset</button>
 				</div>
-				<div class="ftsi-small ftsi-muted">opacity:${it.opacity}</div>
+				<div class="ftsi-small ftsi-muted">
+					opacity:${it.opacity}
+					${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
+					${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
+				</div>
 			`;
 			li.addEventListener('click', (e)=>{
 				const btn = e.target.closest('button, input');
@@ -525,6 +540,11 @@ add_action('wp_enqueue_scripts', function () {
 		const prev = el.style.zIndex;
 		el.style.setProperty('z-index', String(v), 'important');
 		STATE.mods.set(el, { ...(STATE.mods.get(el)||{}), zIndex: { prev, now: v } });
+		// Recalcular orden de pintura después de cambiar z-index
+		setTimeout(() => {
+			STATE.tree.paintOrder = calculatePaintOrder(STATE.tree.root);
+			render();
+		}, 10);
 	}
 	function bumpZ(el, delta){
 		const cs = getCachedStyle(el);
@@ -613,6 +633,32 @@ add_action('wp_enqueue_scripts', function () {
 			current = current.parentElement;
 		}
 		return false;
+	}
+
+	// Calcular orden de pintura global
+	function calculatePaintOrder(ctxRoot){
+		const paintOrder = new Map();
+		let paintIndex = 0;
+
+		function walkContexts(ctx, depth = 0){
+			// Pintar nodos de este contexto en orden
+			ctx.nodes.forEach(node => {
+				paintOrder.set(node.el, {
+					index: paintIndex++,
+					depth: depth,
+					context: ctx.label,
+					zIndex: node.zIndex
+				});
+			});
+
+			// Pintar contextos hijos recursivamente
+			ctx.children.forEach(child => {
+				walkContexts(child, depth + 1);
+			});
+		}
+
+		walkContexts(ctxRoot);
+		return paintOrder;
 	}
 
 	console.info('[FT] Stacking Inspector listo. Pulsa Alt/Option+Z para abrir.');
