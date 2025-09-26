@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.2
+ * Version:     0.1.3
  * Author:      Flowtitude
  */
 
@@ -264,6 +264,14 @@ add_action('wp_enqueue_scripts', function () {
 		const cs = getCachedStyle(p);
 		return cs.display.includes('grid');
 	}
+	function isFlexContainer(el){
+		const cs = getCachedStyle(el);
+		return cs.display.includes('flex');
+	}
+	function isGridContainer(el){
+		const cs = getCachedStyle(el);
+		return cs.display.includes('grid');
+	}
 
 	function analyze(){
 		const all = Array.from(document.body.querySelectorAll('*')).filter(isElementVisible);
@@ -405,6 +413,8 @@ add_action('wp_enqueue_scripts', function () {
 			if(it.position && it.position!=='static') bad.push(it.position);
 			if(it.isFlexItem) bad.push('flex-item');
 			if(it.isGridItem) bad.push('grid-item');
+			if(isFlexContainer(it.el)) bad.push('flex-container');
+			if(isGridContainer(it.el)) bad.push('grid-container');
 
 			const selectorParts = getSelectorParts(it.el);
 
@@ -422,11 +432,9 @@ add_action('wp_enqueue_scripts', function () {
 					<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(it.zIndex)? it.zIndex : ''}" data-act="z" />
 					<button class="ftsi-btn" data-act="z-1">z–</button>
 					<button class="ftsi-btn" data-act="z+1">z+</button>
-					${(it.isFlexItem || it.isGridItem) ? `
-						<input type="number" step="1" placeholder="order" value="${getComputedStyle(it.el).order || ''}" data-act="order" />
-						<button class="ftsi-btn" data-act="o-1">o–</button>
-						<button class="ftsi-btn" data-act="o+1">o+</button>
-					` : ''}
+					<input type="number" step="1" placeholder="order" value="${getCachedStyle(it.el, 'order') || ''}" data-act="order" />
+					<button class="ftsi-btn" data-act="o-1">o–</button>
+					<button class="ftsi-btn" data-act="o+1">o+</button>
 					<button class="ftsi-btn" data-act="highlight">Destacar</button>
 					<button class="ftsi-btn" data-act="reset">Reset</button>
 				</div>
