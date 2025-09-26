@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.1
+ * Version:     0.1.2
  * Author:      Flowtitude
  */
 
@@ -28,6 +28,8 @@ add_action('wp_enqueue_scripts', function () {
 		currentTab: 'stack',
 		highlights: new Set(),
 		mods: new Map(),
+		cache: new Map(), // Cache para getComputedStyle
+		throttleTimer: null,
 	};
 
 	const STYLE = `
@@ -43,8 +45,10 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-search{flex:1;padding:6px 8px;border:1px solid #e5e7eb;border-radius:8px}
 	.ftsi-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
 	.ftsi-item{border:1px solid #e5e7eb;border-radius:8px;padding:8px;background:#fff}
-	.ftsi-item .ftsi-top{display:flex;justify-content:space-between;gap:8px}
-	.ftsi-badges{display:flex;gap:6px;flex-wrap:wrap}
+	.ftsi-item .ftsi-top{display:flex;flex-direction:column;gap:4px}
+	.ftsi-selector{font-weight:600;word-break:break-all;line-height:1.2}
+	.ftsi-classes{font-size:11px;color:#64748b;word-break:break-all;line-height:1.2}
+	.ftsi-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 	.ftsi-badge{border:1px solid #e5e7eb;border-radius:999px;padding:2px 6px;font-size:11px;background:#f8fafc}
 	.ftsi-ctrls{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 	.ftsi-ctrls input{width:80px;padding:4px 6px;border:1px solid #e5e7eb;border-radius:6px}
@@ -145,12 +149,31 @@ add_action('wp_enqueue_scripts', function () {
 		}
 	}
 
+	// Cache para getComputedStyle (optimización de rendimiento)
+	function getCachedStyle(el, prop = null){
+		if(!STATE.cache.has(el)){
+			STATE.cache.set(el, getComputedStyle(el));
+		}
+		const cs = STATE.cache.get(el);
+		return prop ? cs[prop] : cs;
+	}
+
+	// Limpiar cache cuando sea necesario
+	function clearCache(){
+		STATE.cache.clear();
+	}
+
 	// Atajo: Alt/Option + Z (fix Mac layouts que devuelven Ω con Option)
 	window.addEventListener('keydown', (e)=>{
 		// Usamos e.code para garantizar la tecla física Z.
 		if (e.altKey && (e.code === 'KeyZ' || (typeof e.key === 'string' && e.key.toLowerCase() === 'z'))) {
 			e.preventDefault();
-			toggle();
+			// Throttling para evitar múltiples activaciones
+			if(STATE.throttleTimer) return;
+			STATE.throttleTimer = setTimeout(() => {
+				STATE.throttleTimer = null;
+				toggle();
+			}, 100);
 		}
 	},{capture:true});
 
@@ -158,21 +181,30 @@ add_action('wp_enqueue_scripts', function () {
 	window.ftsiOpen = ()=>toggle(true);
 	window.ftsiClose = ()=>toggle(false);
 
-	// ====== Lógica de análisis (igual que versión previa) ======
+	// ====== Lógica de análisis optimizada ======
 	function build(){
+		// Limpiar cache previo
+		clearCache();
+		
 		const fn = ()=> {
-			STATE.tree = analyze();
-			render();
+			try {
+				STATE.tree = analyze();
+				render();
+			} catch(e) {
+				console.warn('[FT] Error en análisis:', e);
+			}
 		};
+		
+		// Usar requestIdleCallback con timeout más largo para páginas complejas
 		if('requestIdleCallback' in window){
-			requestIdleCallback(fn, { timeout: 500 });
+			requestIdleCallback(fn, { timeout: 1000 });
 		}else{
-			setTimeout(fn, 0);
+			setTimeout(fn, 50);
 		}
 	}
 
 	function isElementVisible(el){
-		const cs = getComputedStyle(el);
+		const cs = getCachedStyle(el);
 		if(cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
 		const rect = el.getBoundingClientRect();
 		return rect.width > 0 && rect.height > 0;
@@ -185,6 +217,21 @@ add_action('wp_enqueue_scripts', function () {
 			? '.' + el.className.trim().split(/\s+/).slice(0,3).join('.')
 			: '';
 		return `${tag}${id}${cls}`;
+	}
+
+	function getSelectorParts(el){
+		const tag = el.tagName.toLowerCase();
+		const id = el.id ? `#${el.id}`:'';
+		const allClasses = (el.className && typeof el.className === 'string')
+			? el.className.trim().split(/\s+/)
+			: [];
+		const mainClasses = allClasses.slice(0,3);
+		const extraClasses = allClasses.slice(3);
+		
+		return {
+			main: `${tag}${id}${mainClasses.length ? '.' + mainClasses.join('.') : ''}`,
+			extra: extraClasses.length ? extraClasses.join(' ') : ''
+		};
 	}
 
 	function createsStackingContext(el, cs){
@@ -209,12 +256,12 @@ add_action('wp_enqueue_scripts', function () {
 
 	function isFlexItem(el){
 		const p = el.parentElement; if(!p) return false;
-		const cs = getComputedStyle(p);
+		const cs = getCachedStyle(p);
 		return cs.display.includes('flex');
 	}
 	function isGridItem(el){
 		const p = el.parentElement; if(!p) return false;
-		const cs = getComputedStyle(p);
+		const cs = getCachedStyle(p);
 		return cs.display.includes('grid');
 	}
 
@@ -227,7 +274,7 @@ add_action('wp_enqueue_scripts', function () {
 			let p = el.parentElement;
 			while(p){
 				if(contextMap.has(p)) return contextMap.get(p);
-				const cs = getComputedStyle(p);
+				const cs = getCachedStyle(p);
 				if(createsStackingContext(p, cs)){
 					if(!contextMap.has(p)){
 						const node = { el: p, children: [], nodes: [], parent: null, label: shortSelector(p) };
@@ -244,7 +291,7 @@ add_action('wp_enqueue_scripts', function () {
 		}
 
 		for(const el of all){
-			const cs = getComputedStyle(el);
+			const cs = getCachedStyle(el);
 			if(createsStackingContext(el, cs) && !contextMap.has(el)){
 				const node = { el, children: [], nodes: [], parent: null, label: shortSelector(el) };
 				contextMap.set(el, node);
@@ -255,7 +302,7 @@ add_action('wp_enqueue_scripts', function () {
 		}
 		for(const el of all){
 			const ctx = contextOf(el);
-			const cs = getComputedStyle(el);
+			const cs = getCachedStyle(el);
 			ctx.nodes.push({
 				el,
 				selector: shortSelector(el),
@@ -283,7 +330,7 @@ add_action('wp_enqueue_scripts', function () {
 			nodes.forEach((n,i)=> n.domIndex = i);
 		}
 		const domNodes = all.map((el,i)=>{
-			const cs = getComputedStyle(el);
+			const cs = getCachedStyle(el);
 			return {
 				el, selector: shortSelector(el),
 				zIndex: getZIndex(el, cs),
@@ -359,9 +406,12 @@ add_action('wp_enqueue_scripts', function () {
 			if(it.isFlexItem) bad.push('flex-item');
 			if(it.isGridItem) bad.push('grid-item');
 
+			const selectorParts = getSelectorParts(it.el);
+
 			li.innerHTML = `
 				<div class="ftsi-top">
-					<strong>${it.selector}</strong>
+					<div class="ftsi-selector">${selectorParts.main}</div>
+					${selectorParts.extra ? `<div class="ftsi-classes">${selectorParts.extra}</div>` : ''}
 					<span class="ftsi-badges">
 						<span class="ftsi-badge">z:${it.zIndex}</span>
 						${bad.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
@@ -413,7 +463,7 @@ add_action('wp_enqueue_scripts', function () {
 		STATE.mods.set(el, { ...(STATE.mods.get(el)||{}), zIndex: { prev, now: v } });
 	}
 	function bumpZ(el, delta){
-		const cs = getComputedStyle(el);
+		const cs = getCachedStyle(el);
 		const curr = cs.zIndex === 'auto' ? 0 : Number(cs.zIndex)||0;
 		setZ(el, curr + delta);
 	}
@@ -423,7 +473,7 @@ add_action('wp_enqueue_scripts', function () {
 		STATE.mods.set(el, { ...(STATE.mods.get(el)||{}), order: { prev, now: v } });
 	}
 	function bumpOrder(el, delta){
-		const cs = getComputedStyle(el);
+		const cs = getCachedStyle(el);
 		const curr = Number(cs.order)||0;
 		setOrder(el, curr + delta);
 	}
@@ -462,6 +512,7 @@ add_action('wp_enqueue_scripts', function () {
 		for(const el of STATE.mods.keys()) resetOne(el);
 		STATE.mods.clear();
 		clearHighlights();
+		clearCache();
 		build();
 	}
 
