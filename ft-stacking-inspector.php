@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.4
+ * Version:     0.1.5
  * Author:      Flowtitude
  */
 
@@ -30,6 +30,8 @@ add_action('wp_enqueue_scripts', function () {
 		mods: new Map(),
 		cache: new Map(), // Cache para getComputedStyle
 		throttleTimer: null,
+		filteredRoot: null, // Nodo raíz del filtro actual
+		filteredPath: [], // Ruta del breadcrumb
 	};
 
 	const STYLE = `
@@ -58,9 +60,14 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-highlight{position:absolute;pointer-events:none;border:2px solid #14b8a6;box-shadow:0 0 0 2px rgba(20,184,166,.25) inset;z-index:2147483645}
 	.ftsi-footer{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-top:1px solid #f1f5f9;background:#fafafa}
 	.ftsi-link{color:#0369a1;text-decoration:none}
+	.ftsi-breadcrumb{display:flex;align-items:center;gap:4px;font-size:11px;color:#64748b;margin-bottom:8px;flex-wrap:wrap}
+	.ftsi-breadcrumb-item{cursor:pointer;color:#0369a1;text-decoration:underline}
+	.ftsi-breadcrumb-item:hover{color:#1d4ed8}
+	.ftsi-breadcrumb-separator{color:#9ca3af}
+	.ftsi-filter-info{font-size:11px;color:#64748b;margin-bottom:8px}
 	`;
 
-	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn;
+	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $breadcrumb, $filterInfo, $showAllBtn;
 
 	function ensureUI(){
 		if($root) return;
@@ -85,6 +92,8 @@ add_action('wp_enqueue_scripts', function () {
 					</div>
 				</div>
 				<div class="ftsi-body">
+					<div class="ftsi-breadcrumb" data-breadcrumb style="display:none"></div>
+					<div class="ftsi-filter-info" data-filter-info style="display:none"></div>
 					<div class="ftsi-row">
 						<input class="ftsi-search" type="search" placeholder="Filtrar por selector, id, clase…">
 						<span class="ftsi-small ftsi-muted"><span data-count>0</span> nodos</span>
@@ -93,7 +102,10 @@ add_action('wp_enqueue_scripts', function () {
 				</div>
 				<div class="ftsi-footer">
 					<a class="ftsi-link" href="https://developer.mozilla.org/docs/Web/CSS/CSS_Positioning/Understanding_z-index/Stacking_context" target="_blank" rel="noreferrer">MDN: Stacking contexts</a>
-					<button class="ftsi-btn" data-action="reset-all">Reset all</button>
+					<div>
+						<button class="ftsi-btn" data-action="show-all" style="display:none">Ver todo</button>
+						<button class="ftsi-btn" data-action="reset-all">Reset all</button>
+					</div>
 				</div>
 			</div>
 		`;
@@ -106,6 +118,9 @@ add_action('wp_enqueue_scripts', function () {
 		$tabDom = $root.querySelector('[data-tab="dom"]');
 		$count = $root.querySelector('[data-count]');
 		$resetBtn = $root.querySelector('[data-action="reset-all"]');
+		$breadcrumb = $root.querySelector('[data-breadcrumb]');
+		$filterInfo = $root.querySelector('[data-filter-info]');
+		$showAllBtn = $root.querySelector('[data-action="show-all"]');
 
 		$root.addEventListener('click', (e)=>{
 			const btn = e.target.closest('button');
@@ -121,6 +136,9 @@ add_action('wp_enqueue_scripts', function () {
 			}
 			if(btn.dataset.action === 'reset-all'){
 				resetAll();
+			}
+			if(btn.dataset.action === 'show-all'){
+				showAll();
 			}
 		});
 		$search.addEventListener('input', ()=>render());
@@ -355,6 +373,32 @@ add_action('wp_enqueue_scripts', function () {
 		$list.innerHTML = '';
 		let items = [];
 
+		// Mostrar/ocultar breadcrumb y filtro
+		if(STATE.filteredRoot){
+			$breadcrumb.style.display = 'flex';
+			$filterInfo.style.display = 'block';
+			$showAllBtn.style.display = 'inline-block';
+			
+			// Construir breadcrumb
+			$breadcrumb.innerHTML = STATE.filteredPath.map((item, i) => 
+				`<span class="ftsi-breadcrumb-item" data-path-index="${i}">${item.label}</span>`
+			).join('<span class="ftsi-breadcrumb-separator"> › </span>');
+			
+			// Event listeners para breadcrumb
+			$breadcrumb.addEventListener('click', (e) => {
+				const item = e.target.closest('.ftsi-breadcrumb-item');
+				if(item){
+					const index = parseInt(item.dataset.pathIndex);
+					const targetEl = STATE.filteredPath[index].el;
+					focusOnElement(targetEl);
+				}
+			});
+		} else {
+			$breadcrumb.style.display = 'none';
+			$filterInfo.style.display = 'none';
+			$showAllBtn.style.display = 'none';
+		}
+
 		if(STATE.currentTab === 'dom'){
 			items = STATE.tree.domNodes.slice();
 		}else{
@@ -367,6 +411,14 @@ add_action('wp_enqueue_scripts', function () {
 			items = out;
 		}
 
+		// Filtrar por nodo raíz si está activo
+		if(STATE.filteredRoot){
+			items = items.filter(item => {
+				if(item.isCtx) return true; // Siempre mostrar contextos
+				return item.el === STATE.filteredRoot || isDescendantOf(item.el, STATE.filteredRoot);
+			});
+		}
+
 		const q = ($search?.value || '').trim().toLowerCase();
 		if(q){
 			items = items.filter(it=>{
@@ -376,8 +428,21 @@ add_action('wp_enqueue_scripts', function () {
 		}
 
 		const count = items.filter(i=>!i.isCtx).length;
+		const totalCount = STATE.tree.domNodes.length;
 		const $count = document.querySelector('[data-count]');
-		if($count) $count.textContent = String(count);
+		if($count) {
+			if(STATE.filteredRoot){
+				$count.textContent = `${count} de ${totalCount}`;
+			} else {
+				$count.textContent = String(count);
+			}
+		}
+
+		// Actualizar información del filtro
+		if(STATE.filteredRoot && $filterInfo){
+			const rootLabel = shortSelector(STATE.filteredRoot);
+			$filterInfo.textContent = `Mostrando descendientes de: ${rootLabel}`;
+		}
 
 		for(const it of items){
 			if(it.isCtx){
@@ -425,6 +490,7 @@ add_action('wp_enqueue_scripts', function () {
 					<button class="ftsi-btn" data-act="o-1">o–</button>
 					<button class="ftsi-btn" data-act="o+1">o+</button>
 					<button class="ftsi-btn" data-act="highlight">Destacar</button>
+					<button class="ftsi-btn" data-act="focus">Enfocar</button>
 					<button class="ftsi-btn" data-act="reset">Reset</button>
 				</div>
 				<div class="ftsi-small ftsi-muted">opacity:${it.opacity}</div>
@@ -434,6 +500,7 @@ add_action('wp_enqueue_scripts', function () {
 				if(!btn) return;
 				const act = btn.dataset.act;
 				if(act === 'highlight'){ highlight(it.el); return; }
+				if(act === 'focus'){ focusOnElement(it.el); return; }
 				if(act === 'reset'){ resetOne(it.el); render(); return; }
 				if(act === 'z'){
 					const v = Number(btn.value);
@@ -511,6 +578,41 @@ add_action('wp_enqueue_scripts', function () {
 		clearHighlights();
 		clearCache();
 		build();
+	}
+
+	// Funciones de filtrado por nodo
+	function focusOnElement(el){
+		STATE.filteredRoot = el;
+		buildFilteredPath(el);
+		render();
+	}
+
+	function showAll(){
+		STATE.filteredRoot = null;
+		STATE.filteredPath = [];
+		render();
+	}
+
+	function buildFilteredPath(el){
+		const path = [];
+		let current = el;
+		while(current && current !== document.documentElement){
+			path.unshift({
+				el: current,
+				label: shortSelector(current)
+			});
+			current = current.parentElement;
+		}
+		STATE.filteredPath = path;
+	}
+
+	function isDescendantOf(el, ancestor){
+		let current = el.parentElement;
+		while(current){
+			if(current === ancestor) return true;
+			current = current.parentElement;
+		}
+		return false;
 	}
 
 	console.info('[FT] Stacking Inspector listo. Pulsa Alt/Option+Z para abrir.');
