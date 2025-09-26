@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.3
+ * Version:     0.1.4
  * Author:      Flowtitude
  */
 
@@ -58,13 +58,9 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-highlight{position:absolute;pointer-events:none;border:2px solid #14b8a6;box-shadow:0 0 0 2px rgba(20,184,166,.25) inset;z-index:2147483645}
 	.ftsi-footer{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-top:1px solid #f1f5f9;background:#fafafa}
 	.ftsi-link{color:#0369a1;text-decoration:none}
-
-	/* Botón lanzador fijo */
-	.ftsi-launch{position:fixed;right:16px;bottom:16px;z-index:2147483646}
-	.ftsi-launch .ftsi-btn{font-weight:600}
 	`;
 
-	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $launch;
+	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn;
 
 	function ensureUI(){
 		if($root) return;
@@ -103,12 +99,6 @@ add_action('wp_enqueue_scripts', function () {
 		`;
 		document.body.appendChild($root);
 
-		// Lanzador fijo por si el atajo falla
-		$launch = document.createElement('div');
-		$launch.className = 'ftsi-launch';
-		$launch.innerHTML = `<button class="ftsi-btn" title="Abrir FT Stacking (Alt/Option+Z)">Flowtitude Stacking</button>`;
-		document.body.appendChild($launch);
-
 		$card = $root.querySelector('.ftsi-card');
 		$list = $root.querySelector('[data-list]');
 		$search = $root.querySelector('.ftsi-search');
@@ -134,7 +124,6 @@ add_action('wp_enqueue_scripts', function () {
 			}
 		});
 		$search.addEventListener('input', ()=>render());
-		$launch.addEventListener('click', ()=>toggle(true));
 	}
 
 	function toggle(on){
@@ -524,7 +513,7 @@ add_action('wp_enqueue_scripts', function () {
 		build();
 	}
 
-	console.info('[FT] Stacking Inspector listo. Pulsa Alt/Option+Z o el botón “FT Stacking”.');
+	console.info('[FT] Stacking Inspector listo. Pulsa Alt/Option+Z para abrir.');
 })();
 JS;
 
