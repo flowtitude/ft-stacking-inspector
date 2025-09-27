@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.2
+ * Version:     0.2.3
  * Author:      Flowtitude
  */
 
@@ -563,9 +563,12 @@ add_action('wp_enqueue_scripts', function () {
 		// Preservar estado de expansión
 		const expandedSections = new Set(STATE.expandedSections);
 		
-		// Si no hay filtro activo y estamos en vista de sections, usar render normal
+		// Recalcular orden de pintura siempre
+		STATE.tree.paintOrder = calculatePaintOrder(STATE.tree.root);
+		
+		// Si no hay filtro activo y estamos en vista de sections, recargar secciones expandidas
 		if(!STATE.filteredRoot && STATE.currentTab === 'stack'){
-			render();
+			reloadExpandedSections();
 			return;
 		}
 		
@@ -860,6 +863,22 @@ add_action('wp_enqueue_scripts', function () {
 		return paintOrder;
 	}
 
+	// Recargar contenido de secciones expandidas con nuevo orden
+	function reloadExpandedSections(){
+		const sections = getMainSections();
+		sections.forEach((section, index) => {
+			const sectionId = section.id || `section-${index}`;
+			if(STATE.expandedSections.has(sectionId)){
+				// Limpiar contenido existente
+				const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
+				if(childrenEl) childrenEl.innerHTML = '';
+				
+				// Recargar con nuevo orden
+				loadSectionContent(sectionId, section);
+			}
+		});
+	}
+
 	// Renderizar vista de sections colapsadas
 	function renderSectionsView(){
 		const sections = getMainSections();
@@ -971,6 +990,18 @@ add_action('wp_enqueue_scripts', function () {
 		if(childrenEl){
 			// Encontrar TODOS los descendientes de la section (no solo hijos directos)
 			const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
+			
+			// ORDENAR por orden de pintura
+			allDescendants.sort((a, b) => {
+				const paintA = STATE.tree.paintOrder.get(a);
+				const paintB = STATE.tree.paintOrder.get(b);
+				
+				if(!paintA && !paintB) return 0;
+				if(!paintA) return 1;
+				if(!paintB) return -1;
+				
+				return paintA.index - paintB.index;
+			});
 			
 			allDescendants.forEach(descendant => {
 				const childItem = createElementItem(descendant);
