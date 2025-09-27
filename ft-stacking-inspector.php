@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.6
+ * Version:     0.1.7
  * Author:      Flowtitude
  */
 
@@ -32,6 +32,7 @@ add_action('wp_enqueue_scripts', function () {
 		throttleTimer: null,
 		filteredRoot: null, // Nodo raíz del filtro actual
 		filteredPath: [], // Ruta del breadcrumb
+		expandedSections: new Set(), // Sections expandidas
 	};
 
 	const STYLE = `
@@ -68,6 +69,13 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-paint-order{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;margin-left:4px}
 	.ftsi-paint-order.high{background:#fef3c7;color:#92400e;border-color:#fde68a}
 	.ftsi-paint-order.low{background:#f3e8ff;color:#7c3aed;border-color:#ddd6fe}
+	.ftsi-section-item{background:#f8fafc;border-left:4px solid #3b82f6;padding:8px;margin:4px 0;border-radius:6px}
+	.ftsi-section-header{display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+	.ftsi-section-title{font-weight:600;color:#1e40af}
+	.ftsi-section-count{font-size:11px;color:#64748b;background:#e2e8f0;padding:2px 6px;border-radius:12px}
+	.ftsi-section-toggle{background:none;border:none;color:#64748b;cursor:pointer;font-size:12px;padding:4px}
+	.ftsi-section-content{display:none;margin-top:8px;padding-left:12px;border-left:2px solid #e2e8f0}
+	.ftsi-section-content.expanded{display:block}
 	`;
 
 	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $breadcrumb, $filterInfo, $showAllBtn;
@@ -377,6 +385,13 @@ add_action('wp_enqueue_scripts', function () {
 	function render(){
 		if(!$list || !STATE.tree) return;
 		$list.innerHTML = '';
+
+		// Si no hay filtro activo, mostrar sections colapsadas
+		if(!STATE.filteredRoot && STATE.currentTab === 'stack'){
+			renderSectionsView();
+			return;
+		}
+
 		let items = [];
 
 		// Mostrar/ocultar breadcrumb y filtro
@@ -635,6 +650,32 @@ add_action('wp_enqueue_scripts', function () {
 		return false;
 	}
 
+	// Encontrar el elemento raíz principal (main#brx-content)
+	function findMainRoot(){
+		const mainRoot = document.querySelector('main#brx-content');
+		return mainRoot || document.body;
+	}
+
+	// Filtrar elementos innecesarios
+	function shouldShowElement(el){
+		// Excluir elementos del sistema
+		if(el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'META' || el.tagName === 'LINK') return false;
+		if(el.classList.contains('ftsi-root') || el.classList.contains('ftsi-card')) return false;
+		
+		// Excluir elementos muy pequeños o sin contenido visual
+		const rect = el.getBoundingClientRect();
+		if(rect.width < 1 && rect.height < 1) return false;
+		
+		return true;
+	}
+
+	// Obtener sections directas del main
+	function getMainSections(){
+		const mainRoot = findMainRoot();
+		const sections = Array.from(mainRoot.querySelectorAll(':scope > section'));
+		return sections.filter(shouldShowElement);
+	}
+
 	// Calcular orden de pintura global
 	function calculatePaintOrder(ctxRoot){
 		const paintOrder = new Map();
@@ -659,6 +700,193 @@ add_action('wp_enqueue_scripts', function () {
 
 		walkContexts(ctxRoot);
 		return paintOrder;
+	}
+
+	// Renderizar vista de sections colapsadas
+	function renderSectionsView(){
+		const sections = getMainSections();
+		const mainRoot = findMainRoot();
+		
+		// Mostrar información del main root
+		const mainInfo = document.createElement('li');
+		mainInfo.className = 'ftsi-item';
+		const mainSelector = shortSelector(mainRoot);
+		const mainPaintInfo = STATE.tree.paintOrder.get(mainRoot);
+		
+		mainInfo.innerHTML = `
+			<div class="ftsi-top">
+				<div class="ftsi-selector">
+					${mainSelector}
+					${mainPaintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${mainPaintInfo.index}">P#${mainPaintInfo.index}</span>` : ''}
+				</div>
+				<span class="ftsi-badges">
+					<span class="ftsi-badge">main-root</span>
+					<span class="ftsi-badge ftsi-muted">${sections.length} sections</span>
+				</span>
+			</div>
+		`;
+		$list.appendChild(mainInfo);
+
+		// Mostrar cada section
+		sections.forEach((section, index) => {
+			const sectionItem = document.createElement('li');
+			sectionItem.className = 'ftsi-section-item';
+			
+			const paintInfo = STATE.tree.paintOrder.get(section);
+			const sectionId = section.id || `section-${index}`;
+			const isExpanded = STATE.expandedSections.has(sectionId);
+			
+			// Contar elementos dentro de la section
+			const childElements = Array.from(section.querySelectorAll('*')).filter(shouldShowElement).length;
+			
+			sectionItem.innerHTML = `
+				<div class="ftsi-section-header" data-section-id="${sectionId}">
+					<div class="ftsi-section-title">
+						${shortSelector(section)}
+						${paintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
+					</div>
+					<div style="display:flex;align-items:center;gap:8px">
+						<span class="ftsi-section-count">${childElements} elementos</span>
+						<button class="ftsi-section-toggle" data-section-id="${sectionId}">
+							${isExpanded ? '▼' : '▶'}
+						</button>
+					</div>
+				</div>
+				<div class="ftsi-section-content ${isExpanded ? 'expanded' : ''}" data-section-content="${sectionId}">
+					<!-- Contenido se cargará aquí -->
+				</div>
+			`;
+			
+			// Event listeners para expandir/colapsar
+			sectionItem.addEventListener('click', (e) => {
+				const btn = e.target.closest('.ftsi-section-toggle');
+				const header = e.target.closest('.ftsi-section-header');
+				
+				if(btn || header){
+					const sectionId = (btn || header).dataset.sectionId;
+					toggleSection(sectionId, section);
+				}
+			});
+			
+			$list.appendChild(sectionItem);
+			
+			// Si está expandida, cargar contenido
+			if(isExpanded){
+				loadSectionContent(sectionId, section);
+			}
+		});
+		
+		// Actualizar contador
+		const $count = document.querySelector('[data-count]');
+		if($count) $count.textContent = `${sections.length} sections`;
+	}
+
+	// Alternar sección expandida/colapsada
+	function toggleSection(sectionId, section){
+		const isExpanded = STATE.expandedSections.has(sectionId);
+		const contentEl = document.querySelector(`[data-section-content="${sectionId}"]`);
+		const toggleBtn = document.querySelector(`[data-section-id="${sectionId}"] .ftsi-section-toggle`);
+		
+		if(isExpanded){
+			STATE.expandedSections.delete(sectionId);
+			contentEl.classList.remove('expanded');
+			toggleBtn.textContent = '▶';
+		} else {
+			STATE.expandedSections.add(sectionId);
+			contentEl.classList.add('expanded');
+			toggleBtn.textContent = '▼';
+			loadSectionContent(sectionId, section);
+		}
+	}
+
+	// Cargar contenido de una sección
+	function loadSectionContent(sectionId, section){
+		const contentEl = document.querySelector(`[data-section-content="${sectionId}"]`);
+		if(contentEl.children.length > 0) return; // Ya cargado
+		
+		// Encontrar elementos directos de la section
+		const directChildren = Array.from(section.children).filter(shouldShowElement);
+		
+		directChildren.forEach(child => {
+			const childItem = createElementItem(child);
+			contentEl.appendChild(childItem);
+		});
+	}
+
+	// Crear item de elemento individual
+	function createElementItem(el){
+		const li = document.createElement('li');
+		li.className = 'ftsi-item';
+		
+		const cs = getCachedStyle(el);
+		const paintInfo = STATE.tree.paintOrder.get(el);
+		const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
+		
+		const bad = [];
+		if(createsStackingContext(el, cs)) bad.push('ctx');
+		if(cs.position && cs.position !== 'static') bad.push(cs.position);
+		if(isFlexItem(el)) bad.push('flex-item');
+		if(isGridItem(el)) bad.push('grid-item');
+		if(isFlexContainer(el)) bad.push('flex-container');
+		if(isGridContainer(el)) bad.push('grid-container');
+
+		const selectorParts = getSelectorParts(el);
+
+		li.innerHTML = `
+			<div class="ftsi-top">
+				<div class="ftsi-selector">
+					${selectorParts.main}
+					${paintInfo ? `<span class="ftsi-paint-order ${paintOrderClass}" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
+				</div>
+				${selectorParts.extra ? `<div class="ftsi-classes">${selectorParts.extra}</div>` : ''}
+				<span class="ftsi-badges">
+					<span class="ftsi-badge">z:${getZIndex(el, cs)}</span>
+					${bad.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
+				</span>
+			</div>
+			<div class="ftsi-ctrls">
+				<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(getZIndex(el, cs)) ? getZIndex(el, cs) : ''}" data-act="z" />
+				<button class="ftsi-btn" data-act="z-1">z–</button>
+				<button class="ftsi-btn" data-act="z+1">z+</button>
+				<input type="number" step="1" placeholder="order" value="${getCachedStyle(el, 'order') || ''}" data-act="order" />
+				<button class="ftsi-btn" data-act="o-1">o–</button>
+				<button class="ftsi-btn" data-act="o+1">o+</button>
+				<button class="ftsi-btn" data-act="highlight">Destacar</button>
+				<button class="ftsi-btn" data-act="focus">Enfocar</button>
+				<button class="ftsi-btn" data-act="reset">Reset</button>
+			</div>
+			<div class="ftsi-small ftsi-muted">
+				opacity:${parseFloat(cs.opacity)}
+				${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
+				${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
+			</div>
+		`;
+		
+		// Event listeners
+		li.addEventListener('click', (e)=>{
+			const btn = e.target.closest('button, input');
+			if(!btn) return;
+			const act = btn.dataset.act;
+			if(act === 'highlight'){ highlight(el); return; }
+			if(act === 'focus'){ focusOnElement(el); return; }
+			if(act === 'reset'){ resetOne(el); render(); return; }
+			if(act === 'z'){
+				const v = Number(btn.value);
+				if(Number.isFinite(v)){ setZ(el, v); render(); }
+				return;
+			}
+			if(act === 'order'){
+				const v = Number(btn.value);
+				if(Number.isFinite(v)){ setOrder(el, v); render(); }
+				return;
+			}
+			if(act === 'z-1'){ bumpZ(el, -1); render(); return; }
+			if(act === 'z+1'){ bumpZ(el, +1); render(); return; }
+			if(act === 'o-1'){ bumpOrder(el, -1); render(); return; }
+			if(act === 'o+1'){ bumpOrder(el, +1); render(); return; }
+		});
+		
+		return li;
 	}
 
 	console.info('[FT] Stacking Inspector listo. Pulsa Alt/Option+Z para abrir.');
