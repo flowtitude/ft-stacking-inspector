@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.9
+ * Version:     0.2.0
  * Author:      Flowtitude
  */
 
@@ -73,8 +73,8 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-section-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9}
 	.ftsi-section-header:hover{background:#f8fafc}
 	.ftsi-section-title{font-weight:600;color:#1e40af;display:flex;align-items:center;gap:8px;flex:1}
-	.ftsi-section-toggle{background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;font-weight:600;display:flex;align-items:center;gap:4px;min-width:60px;justify-content:center}
-	.ftsi-section-toggle:hover{background:#2563eb}
+	.ftsi-section-toggle{background:#e2e8f0;color:#64748b;border:1px solid #d1d5db;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:10px;font-weight:500;display:flex;align-items:center;gap:2px;min-width:30px;justify-content:center}
+	.ftsi-section-toggle:hover{background:#d1d5db}
 	.ftsi-section-content{display:none;padding:8px 12px;background:#fafafa;border-top:1px solid #f1f5f9}
 	.ftsi-section-content.expanded{display:block}
 	.ftsi-section-children{margin-top:8px;padding-left:12px;border-left:2px solid #e2e8f0}
@@ -741,8 +741,8 @@ add_action('wp_enqueue_scripts', function () {
 			const sectionId = section.id || `section-${index}`;
 			const isExpanded = STATE.expandedSections.has(sectionId);
 			
-			// Contar elementos directos
-			const directChildren = Array.from(section.children).filter(shouldShowElement);
+			// Contar TODOS los descendientes
+			const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
 			
 			sectionItem.innerHTML = `
 				<div class="ftsi-section-header" data-section-id="${sectionId}">
@@ -751,8 +751,7 @@ add_action('wp_enqueue_scripts', function () {
 						${paintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
 					</div>
 					<button class="ftsi-section-toggle" data-section-id="${sectionId}">
-						${directChildren.length}
-						${isExpanded ? '▼' : '▶'}
+						${allDescendants.length}${isExpanded ? '▼' : '▶'}
 					</button>
 				</div>
 				<div class="ftsi-section-content ${isExpanded ? 'expanded' : ''}" data-section-content="${sectionId}">
@@ -794,18 +793,18 @@ add_action('wp_enqueue_scripts', function () {
 		const toggleBtn = document.querySelector(`[data-section-id="${sectionId}"] .ftsi-section-toggle`);
 		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
 		
-		// Contar elementos directos
-		const directChildren = Array.from(section.children).filter(shouldShowElement);
+		// Contar TODOS los descendientes
+		const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
 		
 		if(isExpanded){
 			STATE.expandedSections.delete(sectionId);
 			contentEl.classList.remove('expanded');
-			toggleBtn.innerHTML = `${directChildren.length} ▶`;
+			toggleBtn.innerHTML = `${allDescendants.length} ▶`;
 			if(childrenEl) childrenEl.style.display = 'none';
 		} else {
 			STATE.expandedSections.add(sectionId);
 			contentEl.classList.add('expanded');
-			toggleBtn.innerHTML = `${directChildren.length} ▼`;
+			toggleBtn.innerHTML = `${allDescendants.length} ▼`;
 			if(childrenEl) childrenEl.style.display = 'block';
 			loadSectionContent(sectionId, section);
 		}
@@ -829,11 +828,11 @@ add_action('wp_enqueue_scripts', function () {
 		if(childrenEl){
 			childrenEl.appendChild(controlsBtn);
 			
-			// Encontrar elementos directos de la section
-			const directChildren = Array.from(section.children).filter(shouldShowElement);
+			// Encontrar TODOS los descendientes de la section (no solo hijos directos)
+			const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
 			
-			directChildren.forEach(child => {
-				const childItem = createElementItem(child);
+			allDescendants.forEach(descendant => {
+				const childItem = createElementItem(descendant);
 				childrenEl.appendChild(childItem);
 			});
 		}
