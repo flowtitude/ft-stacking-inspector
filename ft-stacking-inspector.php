@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.1
+ * Version:     0.2.2
  * Author:      Flowtitude
  */
 
@@ -54,8 +54,9 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 	.ftsi-badge{border:1px solid #e5e7eb;border-radius:999px;padding:2px 6px;font-size:11px;background:#f8fafc}
 	.ftsi-ctrls{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-	.ftsi-ctrls input{width:80px;padding:4px 6px;border:1px solid #e5e7eb;border-radius:6px}
 	.ftsi-ctrls .ftsi-btn{padding:4px 6px}
+	.ftsi-values{display:flex;gap:8px;margin-top:4px;font-size:11px;color:#64748b}
+	.ftsi-value{background:#f1f5f9;padding:2px 6px;border-radius:3px;border:1px solid #e2e8f0}
 	.ftsi-muted{color:#64748b}
 	.ftsi-small{font-size:11px}
 	.ftsi-highlight{position:absolute;pointer-events:none;border:2px solid #14b8a6;box-shadow:0 0 0 2px rgba(20,184,166,.25) inset;z-index:2147483645}
@@ -389,6 +390,10 @@ add_action('wp_enqueue_scripts', function () {
 
 	function render(){
 		if(!$list || !STATE.tree) return;
+		
+		// Preservar estado de expansión antes de limpiar
+		const expandedSections = new Set(STATE.expandedSections);
+		
 		$list.innerHTML = '';
 
 		// Si no hay filtro activo, mostrar sections colapsadas
@@ -514,15 +519,17 @@ add_action('wp_enqueue_scripts', function () {
 					</span>
 				</div>
 				<div class="ftsi-ctrls">
-					<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(it.zIndex)? it.zIndex : ''}" data-act="z" />
 					<button class="ftsi-btn" data-act="z-1">z–</button>
 					<button class="ftsi-btn" data-act="z+1">z+</button>
-					<input type="number" step="1" placeholder="order" value="${getCachedStyle(it.el, 'order') || ''}" data-act="order" />
 					<button class="ftsi-btn" data-act="o-1">o–</button>
 					<button class="ftsi-btn" data-act="o+1">o+</button>
 					<button class="ftsi-btn" data-act="highlight">Destacar</button>
 					<button class="ftsi-btn" data-act="focus">Enfocar</button>
 					<button class="ftsi-btn" data-act="reset">Reset</button>
+				</div>
+				<div class="ftsi-values">
+					<span class="ftsi-value">z-index: ${Number.isFinite(it.zIndex)? it.zIndex : 'auto'}</span>
+					<span class="ftsi-value">order: ${getCachedStyle(it.el, 'order') || '0'}</span>
 				</div>
 				<div class="ftsi-small ftsi-muted">
 					opacity:${it.opacity}
@@ -537,23 +544,169 @@ add_action('wp_enqueue_scripts', function () {
 				if(act === 'highlight'){ highlight(it.el); return; }
 				if(act === 'focus'){ focusOnElement(it.el); return; }
 				if(act === 'reset'){ resetOne(it.el); render(); return; }
-				if(act === 'z'){
-					const v = Number(btn.value);
-					if(Number.isFinite(v)){ setZ(it.el, v); render(); }
-					return;
-				}
-				if(act === 'order'){
-					const v = Number(btn.value);
-					if(Number.isFinite(v)){ setOrder(it.el, v); render(); }
-					return;
-				}
-				if(act === 'z-1'){ bumpZ(it.el, -1); render(); return; }
-				if(act === 'z+1'){ bumpZ(it.el, +1); render(); return; }
-				if(act === 'o-1'){ bumpOrder(it.el, -1); render(); return; }
-				if(act === 'o+1'){ bumpOrder(it.el, +1); render(); return; }
+				if(act === 'z-1'){ bumpZ(it.el, -1); renderWithReordering(); return; }
+				if(act === 'z+1'){ bumpZ(it.el, +1); renderWithReordering(); return; }
+				if(act === 'o-1'){ bumpOrder(it.el, -1); renderWithReordering(); return; }
+				if(act === 'o+1'){ bumpOrder(it.el, +1); renderWithReordering(); return; }
 			});
 			$list.appendChild(li);
 		}
+		
+		// Restaurar estado de expansión
+		STATE.expandedSections = expandedSections;
+	}
+
+	// Renderizar con reordenamiento automático por orden de pintura
+	function renderWithReordering(){
+		if(!$list || !STATE.tree) return;
+		
+		// Preservar estado de expansión
+		const expandedSections = new Set(STATE.expandedSections);
+		
+		// Si no hay filtro activo y estamos en vista de sections, usar render normal
+		if(!STATE.filteredRoot && STATE.currentTab === 'stack'){
+			render();
+			return;
+		}
+		
+		// Recalcular orden de pintura
+		STATE.tree.paintOrder = calculatePaintOrder(STATE.tree.root);
+		
+		$list.innerHTML = '';
+
+		let items = [];
+
+		// Mostrar/ocultar breadcrumb y filtro
+		if(STATE.filteredRoot){
+			$breadcrumb.style.display = 'flex';
+			$filterInfo.style.display = 'block';
+			$showAllBtn.style.display = 'inline-block';
+			
+			// Construir breadcrumb
+			$breadcrumb.innerHTML = STATE.filteredPath.map((item, i) => 
+				`<span class="ftsi-breadcrumb-item" data-level="${i}">${item.label}</span>`
+			).join('<span class="ftsi-breadcrumb-separator">›</span>');
+			
+			// Construir breadcrumb event listeners
+			$breadcrumb.querySelectorAll('.ftsi-breadcrumb-item').forEach((item, i) => {
+				item.addEventListener('click', () => {
+					if(i === 0){
+						showAll();
+					} else {
+						focusOnElement(STATE.filteredPath[i].element);
+					}
+				});
+			});
+			
+			$filterInfo.textContent = `Viendo descendientes de: ${shortSelector(STATE.filteredRoot)}`;
+		} else {
+			$breadcrumb.style.display = 'none';
+			$filterInfo.style.display = 'none';
+			$showAllBtn.style.display = 'none';
+		}
+
+		// Recopilar elementos según filtro
+		const ctxRoot = STATE.tree.root;
+		if(STATE.filteredRoot){
+			items = Array.from(STATE.filteredRoot.querySelectorAll('*')).filter(el => 
+				isDescendantOf(el, STATE.filteredRoot) && shouldShowElement(el)
+			).map(el => analyze(el));
+		} else {
+			const walkContexts = (ctx) => {
+				if(ctx.elements){
+					ctx.elements.forEach(el => {
+						if(shouldShowElement(el)) items.push(analyze(el));
+						walkContexts(el);
+					});
+				}
+			};
+			walkContexts(ctxRoot);
+		}
+
+		// ORDENAR por orden de pintura (paint order)
+		items.sort((a, b) => {
+			const paintA = STATE.tree.paintOrder.get(a.el);
+			const paintB = STATE.tree.paintOrder.get(b.el);
+			
+			if(!paintA && !paintB) return 0;
+			if(!paintA) return 1;
+			if(!paintB) return -1;
+			
+			return paintA.index - paintB.index;
+		});
+
+		// Renderizar elementos ordenados
+		items.forEach((it, i) => {
+			const li = document.createElement('li');
+			li.className = 'ftsi-item';
+			it.domIndex = i;
+			
+			const paintInfo = STATE.tree.paintOrder.get(it.el);
+			const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
+			const selectorParts = getSelectorParts(it.el);
+			const bad = [];
+			if(it.createsStackingContext) bad.push('ctx');
+			if(it.position && it.position !== 'static') bad.push(it.position);
+			if(it.isFlexItem) bad.push('flex-item');
+			if(it.isGridItem) bad.push('grid-item');
+			if(isFlexContainer(it.el)) bad.push('flex-container');
+			if(isGridContainer(it.el)) bad.push('grid-container');
+			
+			li.innerHTML = `
+				<div class="ftsi-top">
+					<div class="ftsi-selector">
+						${selectorParts.main}
+						${paintInfo ? `<span class="ftsi-paint-order ${paintOrderClass}" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
+					</div>
+					${selectorParts.extra ? `<div class="ftsi-classes">${selectorParts.extra}</div>` : ''}
+					<span class="ftsi-badges">
+						<span class="ftsi-badge">z:${it.zIndex}</span>
+						${bad.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
+						<span class="ftsi-badge ftsi-muted">DOM#${it.domIndex ?? '–'}</span>
+					</span>
+				</div>
+				<div class="ftsi-ctrls">
+					<button class="ftsi-btn" data-act="z-1">z–</button>
+					<button class="ftsi-btn" data-act="z+1">z+</button>
+					<button class="ftsi-btn" data-act="o-1">o–</button>
+					<button class="ftsi-btn" data-act="o+1">o+</button>
+					<button class="ftsi-btn" data-act="highlight">Destacar</button>
+					<button class="ftsi-btn" data-act="focus">Enfocar</button>
+					<button class="ftsi-btn" data-act="reset">Reset</button>
+				</div>
+				<div class="ftsi-values">
+					<span class="ftsi-value">z-index: ${Number.isFinite(it.zIndex)? it.zIndex : 'auto'}</span>
+					<span class="ftsi-value">order: ${getCachedStyle(it.el, 'order') || '0'}</span>
+				</div>
+				<div class="ftsi-small ftsi-muted">
+					opacity:${it.opacity}
+					${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
+					${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
+				</div>
+			`;
+			
+			// Event listeners
+			li.addEventListener('click', (e)=>{
+				const btn = e.target.closest('button, input');
+				if(!btn) return;
+				const act = btn.dataset.act;
+				if(act === 'highlight'){ highlight(it.el); return; }
+				if(act === 'focus'){ focusOnElement(it.el); return; }
+				if(act === 'reset'){ resetOne(it.el); renderWithReordering(); return; }
+				if(act === 'z-1'){ bumpZ(it.el, -1); renderWithReordering(); return; }
+				if(act === 'z+1'){ bumpZ(it.el, +1); renderWithReordering(); return; }
+				if(act === 'o-1'){ bumpOrder(it.el, -1); renderWithReordering(); return; }
+				if(act === 'o+1'){ bumpOrder(it.el, +1); renderWithReordering(); return; }
+			});
+			$list.appendChild(li);
+		});
+		
+		// Actualizar contador
+		const $count = document.querySelector('[data-count]');
+		if($count) $count.textContent = `${items.length} elementos`;
+		
+		// Restaurar estado de expansión
+		STATE.expandedSections = expandedSections;
 	}
 
 	function setZ(el, v){
@@ -840,7 +993,7 @@ add_action('wp_enqueue_scripts', function () {
 			parent = parent.parentElement;
 		}
 		
-		// Aplicar color de fondo según profundidad
+		// Aplicar color de fondo según profundidad (sin indentación)
 		const depthColors = [
 			'background: white',                    // L0 (elemento raíz)
 			'background: #fafbfc',                  // L1
@@ -879,21 +1032,19 @@ add_action('wp_enqueue_scripts', function () {
 				</span>
 			</div>
 			<div class="ftsi-ctrls">
-				<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(getZIndex(el, cs)) ? getZIndex(el, cs) : ''}" data-act="z" />
 				<button class="ftsi-btn" data-act="z-1">z–</button>
 				<button class="ftsi-btn" data-act="z+1">z+</button>
-				<input type="number" step="1" placeholder="order" value="${getCachedStyle(el, 'order') || ''}" data-act="order" />
 				<button class="ftsi-btn" data-act="o-1">o–</button>
 				<button class="ftsi-btn" data-act="o+1">o+</button>
 				<button class="ftsi-btn" data-act="highlight">Destacar</button>
 				<button class="ftsi-btn" data-act="focus">Enfocar</button>
 				<button class="ftsi-btn" data-act="reset">Reset</button>
 			</div>
-			<div class="ftsi-small ftsi-muted">
-				opacity:${parseFloat(cs.opacity)}
-				${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
-				${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
+			<div class="ftsi-values">
+				<span class="ftsi-value">z-index: ${Number.isFinite(getZIndex(el, cs)) ? getZIndex(el, cs) : 'auto'}</span>
+				<span class="ftsi-value">order: ${getCachedStyle(el, 'order') || '0'}</span>
 			</div>
+			<div class="ftsi-small ftsi-muted">
 		`;
 		
 		// Event listeners
@@ -904,20 +1055,10 @@ add_action('wp_enqueue_scripts', function () {
 			if(act === 'highlight'){ highlight(el); return; }
 			if(act === 'focus'){ focusOnElement(el); return; }
 			if(act === 'reset'){ resetOne(el); render(); return; }
-			if(act === 'z'){
-				const v = Number(btn.value);
-				if(Number.isFinite(v)){ setZ(el, v); render(); }
-				return;
-			}
-			if(act === 'order'){
-				const v = Number(btn.value);
-				if(Number.isFinite(v)){ setOrder(el, v); render(); }
-				return;
-			}
-			if(act === 'z-1'){ bumpZ(el, -1); render(); return; }
-			if(act === 'z+1'){ bumpZ(el, +1); render(); return; }
-			if(act === 'o-1'){ bumpOrder(el, -1); render(); return; }
-			if(act === 'o+1'){ bumpOrder(el, +1); render(); return; }
+			if(act === 'z-1'){ bumpZ(el, -1); renderWithReordering(); return; }
+			if(act === 'z+1'){ bumpZ(el, +1); renderWithReordering(); return; }
+			if(act === 'o-1'){ bumpOrder(el, -1); renderWithReordering(); return; }
+			if(act === 'o+1'){ bumpOrder(el, +1); renderWithReordering(); return; }
 		});
 		
 		return li;
