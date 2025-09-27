@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.1.8
+ * Version:     0.1.9
  * Author:      Flowtitude
  */
 
@@ -69,17 +69,18 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-paint-order{background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;margin-left:4px}
 	.ftsi-paint-order.high{background:#fef3c7;color:#92400e;border-color:#fde68a}
 	.ftsi-paint-order.low{background:#f3e8ff;color:#7c3aed;border-color:#ddd6fe}
-	.ftsi-section-item{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin:6px 0;overflow:hidden}
-	.ftsi-section-header{display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:12px;background:#ffffff;border-bottom:1px solid #f1f5f9}
-	.ftsi-section-title{font-weight:600;color:#1e40af;display:flex;align-items:center;gap:8px}
-	.ftsi-section-count{font-size:11px;color:#64748b;background:#e2e8f0;padding:3px 8px;border-radius:12px;font-weight:500}
-	.ftsi-section-toggle{background:#f1f5f9;border:1px solid #d1d5db;color:#64748b;cursor:pointer;font-size:12px;padding:4px 8px;border-radius:4px;font-weight:600}
+	.ftsi-section-item{border:1px solid #e2e8f0;border-radius:8px;margin:4px 0;overflow:hidden;background:#fff}
+	.ftsi-section-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9}
+	.ftsi-section-header:hover{background:#f8fafc}
+	.ftsi-section-title{font-weight:600;color:#1e40af;display:flex;align-items:center;gap:8px;flex:1}
+	.ftsi-section-toggle{background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;font-weight:600;display:flex;align-items:center;gap:4px;min-width:60px;justify-content:center}
+	.ftsi-section-toggle:hover{background:#2563eb}
 	.ftsi-section-content{display:none;padding:8px 12px;background:#fafafa;border-top:1px solid #f1f5f9}
 	.ftsi-section-content.expanded{display:block}
-	.ftsi-section-children{margin-top:8px;padding-left:16px;border-left:3px solid #d1d5db}
-	.ftsi-section-info{display:flex;flex-direction:column;gap:4px;margin-top:8px}
-	.ftsi-section-badges{display:flex;gap:6px;flex-wrap:wrap}
-	.ftsi-section-details{font-size:11px;color:#64748b;line-height:1.4}
+	.ftsi-section-children{margin-top:8px;padding-left:12px;border-left:2px solid #e2e8f0}
+	.ftsi-section-info{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+	.ftsi-section-badges{display:flex;gap:4px;flex-wrap:wrap}
+	.ftsi-section-details{font-size:11px;color:#64748b;line-height:1.3}
 	`;
 
 	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $breadcrumb, $filterInfo, $showAllBtn;
@@ -740,19 +741,8 @@ add_action('wp_enqueue_scripts', function () {
 			const sectionId = section.id || `section-${index}`;
 			const isExpanded = STATE.expandedSections.has(sectionId);
 			
-			// Contar elementos dentro de la section
-			const childElements = Array.from(section.querySelectorAll('*')).filter(shouldShowElement).length;
+			// Contar elementos directos
 			const directChildren = Array.from(section.children).filter(shouldShowElement);
-			
-			// Información del elemento section
-			const cs = getCachedStyle(section);
-			const sectionBadges = [];
-			if(createsStackingContext(section, cs)) sectionBadges.push('ctx');
-			if(cs.position && cs.position !== 'static') sectionBadges.push(cs.position);
-			if(isFlexContainer(section)) sectionBadges.push('flex-container');
-			if(isGridContainer(section)) sectionBadges.push('grid-container');
-			
-			const selectorParts = getSelectorParts(section);
 			
 			sectionItem.innerHTML = `
 				<div class="ftsi-section-header" data-section-id="${sectionId}">
@@ -760,41 +750,12 @@ add_action('wp_enqueue_scripts', function () {
 						${shortSelector(section)}
 						${paintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
 					</div>
-					<div style="display:flex;align-items:center;gap:8px">
-						<span class="ftsi-section-count">${directChildren.length} hijos</span>
-						<button class="ftsi-section-toggle" data-section-id="${sectionId}">
-							${isExpanded ? '▼ Expandido' : '▶ Expandir'}
-						</button>
-					</div>
+					<button class="ftsi-section-toggle" data-section-id="${sectionId}">
+						${directChildren.length}
+						${isExpanded ? '▼' : '▶'}
+					</button>
 				</div>
 				<div class="ftsi-section-content ${isExpanded ? 'expanded' : ''}" data-section-content="${sectionId}">
-					<!-- Información del elemento section -->
-					<div class="ftsi-section-info">
-						${selectorParts.extra ? `<div class="ftsi-section-details">Clases: ${selectorParts.extra}</div>` : ''}
-						<div class="ftsi-section-badges">
-							<span class="ftsi-badge">z:${getZIndex(section, cs)}</span>
-							${sectionBadges.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
-						</div>
-						<div class="ftsi-section-details">
-							opacity:${parseFloat(cs.opacity)}
-							${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
-							${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
-						</div>
-					</div>
-					
-					<!-- Controles para la section -->
-					<div class="ftsi-ctrls" style="margin-top:12px">
-						<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(getZIndex(section, cs)) ? getZIndex(section, cs) : ''}" data-act="z" />
-						<button class="ftsi-btn" data-act="z-1">z–</button>
-						<button class="ftsi-btn" data-act="z+1">z+</button>
-						<input type="number" step="1" placeholder="order" value="${getCachedStyle(section, 'order') || ''}" data-act="order" />
-						<button class="ftsi-btn" data-act="o-1">o–</button>
-						<button class="ftsi-btn" data-act="o+1">o+</button>
-						<button class="ftsi-btn" data-act="highlight">Destacar</button>
-						<button class="ftsi-btn" data-act="focus">Enfocar</button>
-						<button class="ftsi-btn" data-act="reset">Reset</button>
-					</div>
-					
 					<!-- Elementos hijos -->
 					<div class="ftsi-section-children" style="display:none">
 						<!-- Contenido se cargará aquí -->
@@ -802,7 +763,7 @@ add_action('wp_enqueue_scripts', function () {
 				</div>
 			`;
 			
-			// Event listeners para expandir/colapsar
+			// Event listeners
 			sectionItem.addEventListener('click', (e) => {
 				const btn = e.target.closest('.ftsi-section-toggle');
 				const header = e.target.closest('.ftsi-section-header');
@@ -810,29 +771,6 @@ add_action('wp_enqueue_scripts', function () {
 				if(btn || header){
 					const sectionId = (btn || header).dataset.sectionId;
 					toggleSection(sectionId, section);
-				}
-				
-				// Event listeners para controles de la section
-				const controlBtn = e.target.closest('[data-act]');
-				if(controlBtn && !btn && !header){
-					const act = controlBtn.dataset.act;
-					if(act === 'highlight'){ highlight(section); return; }
-					if(act === 'focus'){ focusOnElement(section); return; }
-					if(act === 'reset'){ resetOne(section); render(); return; }
-					if(act === 'z'){
-						const v = Number(controlBtn.value);
-						if(Number.isFinite(v)){ setZ(section, v); render(); }
-						return;
-					}
-					if(act === 'order'){
-						const v = Number(controlBtn.value);
-						if(Number.isFinite(v)){ setOrder(section, v); render(); }
-						return;
-					}
-					if(act === 'z-1'){ bumpZ(section, -1); render(); return; }
-					if(act === 'z+1'){ bumpZ(section, +1); render(); return; }
-					if(act === 'o-1'){ bumpOrder(section, -1); render(); return; }
-					if(act === 'o+1'){ bumpOrder(section, +1); render(); return; }
 				}
 			});
 			
@@ -856,15 +794,18 @@ add_action('wp_enqueue_scripts', function () {
 		const toggleBtn = document.querySelector(`[data-section-id="${sectionId}"] .ftsi-section-toggle`);
 		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
 		
+		// Contar elementos directos
+		const directChildren = Array.from(section.children).filter(shouldShowElement);
+		
 		if(isExpanded){
 			STATE.expandedSections.delete(sectionId);
 			contentEl.classList.remove('expanded');
-			toggleBtn.textContent = '▶ Expandir';
+			toggleBtn.innerHTML = `${directChildren.length} ▶`;
 			if(childrenEl) childrenEl.style.display = 'none';
 		} else {
 			STATE.expandedSections.add(sectionId);
 			contentEl.classList.add('expanded');
-			toggleBtn.textContent = '▼ Expandido';
+			toggleBtn.innerHTML = `${directChildren.length} ▼`;
 			if(childrenEl) childrenEl.style.display = 'block';
 			loadSectionContent(sectionId, section);
 		}
@@ -875,15 +816,107 @@ add_action('wp_enqueue_scripts', function () {
 		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
 		if(childrenEl && childrenEl.children.length > 0) return; // Ya cargado
 		
-		// Encontrar elementos directos de la section
-		const directChildren = Array.from(section.children).filter(shouldShowElement);
+		// Crear botón para mostrar controles del section
+		const controlsBtn = document.createElement('button');
+		controlsBtn.className = 'ftsi-btn';
+		controlsBtn.style.marginBottom = '8px';
+		controlsBtn.textContent = 'Controles del Section';
+		controlsBtn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			showSectionControls(sectionId, section);
+		});
 		
 		if(childrenEl){
+			childrenEl.appendChild(controlsBtn);
+			
+			// Encontrar elementos directos de la section
+			const directChildren = Array.from(section.children).filter(shouldShowElement);
+			
 			directChildren.forEach(child => {
 				const childItem = createElementItem(child);
 				childrenEl.appendChild(childItem);
 			});
 		}
+	}
+
+	// Mostrar controles del section
+	function showSectionControls(sectionId, section){
+		const cs = getCachedStyle(section);
+		const paintInfo = STATE.tree.paintOrder.get(section);
+		const sectionBadges = [];
+		if(createsStackingContext(section, cs)) sectionBadges.push('ctx');
+		if(cs.position && cs.position !== 'static') sectionBadges.push(cs.position);
+		if(isFlexContainer(section)) sectionBadges.push('flex-container');
+		if(isGridContainer(section)) sectionBadges.push('grid-container');
+		
+		const selectorParts = getSelectorParts(section);
+		
+		// Crear modal o panel de controles
+		const modal = document.createElement('div');
+		modal.style.cssText = `
+			position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+			background: white; border: 1px solid #e2e8f0; border-radius: 8px;
+			padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.12);
+			z-index: 2147483647; max-width: 400px; width: 90%;
+		`;
+		
+		modal.innerHTML = `
+			<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+				<h3 style="margin:0;font-size:14px;color:#1e40af">Controles del Section</h3>
+				<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:18px;cursor:pointer">×</button>
+			</div>
+			<div style="margin-bottom:12px">
+				<div style="font-weight:600;margin-bottom:4px">${shortSelector(section)}</div>
+				${selectorParts.extra ? `<div style="font-size:11px;color:#64748b;margin-bottom:4px">${selectorParts.extra}</div>` : ''}
+				<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px">
+					<span class="ftsi-badge">z:${getZIndex(section, cs)}</span>
+					${sectionBadges.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
+				</div>
+				<div style="font-size:11px;color:#64748b">
+					opacity:${parseFloat(cs.opacity)}
+					${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
+					${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
+				</div>
+			</div>
+			<div class="ftsi-ctrls">
+				<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(getZIndex(section, cs)) ? getZIndex(section, cs) : ''}" data-act="z" />
+				<button class="ftsi-btn" data-act="z-1">z–</button>
+				<button class="ftsi-btn" data-act="z+1">z+</button>
+				<input type="number" step="1" placeholder="order" value="${getCachedStyle(section, 'order') || ''}" data-act="order" />
+				<button class="ftsi-btn" data-act="o-1">o–</button>
+				<button class="ftsi-btn" data-act="o+1">o+</button>
+				<button class="ftsi-btn" data-act="highlight">Destacar</button>
+				<button class="ftsi-btn" data-act="focus">Enfocar</button>
+				<button class="ftsi-btn" data-act="reset">Reset</button>
+			</div>
+		`;
+		
+		// Event listeners para controles
+		modal.addEventListener('click', (e) => {
+			const btn = e.target.closest('[data-act]');
+			if(!btn) return;
+			
+			const act = btn.dataset.act;
+			if(act === 'highlight'){ highlight(section); return; }
+			if(act === 'focus'){ focusOnElement(section); modal.remove(); return; }
+			if(act === 'reset'){ resetOne(section); render(); return; }
+			if(act === 'z'){
+				const v = Number(btn.value);
+				if(Number.isFinite(v)){ setZ(section, v); render(); }
+				return;
+			}
+			if(act === 'order'){
+				const v = Number(btn.value);
+				if(Number.isFinite(v)){ setOrder(section, v); render(); }
+				return;
+			}
+			if(act === 'z-1'){ bumpZ(section, -1); render(); return; }
+			if(act === 'z+1'){ bumpZ(section, +1); render(); return; }
+			if(act === 'o-1'){ bumpOrder(section, -1); render(); return; }
+			if(act === 'o+1'){ bumpOrder(section, +1); render(); return; }
+		});
+		
+		document.body.appendChild(modal);
 	}
 
 	// Crear item de elemento individual
