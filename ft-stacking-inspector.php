@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.0
+ * Version:     0.2.1
  * Author:      Flowtitude
  */
 
@@ -815,19 +815,7 @@ add_action('wp_enqueue_scripts', function () {
 		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
 		if(childrenEl && childrenEl.children.length > 0) return; // Ya cargado
 		
-		// Crear botón para mostrar controles del section
-		const controlsBtn = document.createElement('button');
-		controlsBtn.className = 'ftsi-btn';
-		controlsBtn.style.marginBottom = '8px';
-		controlsBtn.textContent = 'Controles del Section';
-		controlsBtn.addEventListener('click', (e) => {
-			e.stopPropagation();
-			showSectionControls(sectionId, section);
-		});
-		
 		if(childrenEl){
-			childrenEl.appendChild(controlsBtn);
-			
 			// Encontrar TODOS los descendientes de la section (no solo hijos directos)
 			const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
 			
@@ -838,90 +826,31 @@ add_action('wp_enqueue_scripts', function () {
 		}
 	}
 
-	// Mostrar controles del section
-	function showSectionControls(sectionId, section){
-		const cs = getCachedStyle(section);
-		const paintInfo = STATE.tree.paintOrder.get(section);
-		const sectionBadges = [];
-		if(createsStackingContext(section, cs)) sectionBadges.push('ctx');
-		if(cs.position && cs.position !== 'static') sectionBadges.push(cs.position);
-		if(isFlexContainer(section)) sectionBadges.push('flex-container');
-		if(isGridContainer(section)) sectionBadges.push('grid-container');
-		
-		const selectorParts = getSelectorParts(section);
-		
-		// Crear modal o panel de controles
-		const modal = document.createElement('div');
-		modal.style.cssText = `
-			position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-			background: white; border: 1px solid #e2e8f0; border-radius: 8px;
-			padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.12);
-			z-index: 2147483647; max-width: 400px; width: 90%;
-		`;
-		
-		modal.innerHTML = `
-			<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-				<h3 style="margin:0;font-size:14px;color:#1e40af">Controles del Section</h3>
-				<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:18px;cursor:pointer">×</button>
-			</div>
-			<div style="margin-bottom:12px">
-				<div style="font-weight:600;margin-bottom:4px">${shortSelector(section)}</div>
-				${selectorParts.extra ? `<div style="font-size:11px;color:#64748b;margin-bottom:4px">${selectorParts.extra}</div>` : ''}
-				<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px">
-					<span class="ftsi-badge">z:${getZIndex(section, cs)}</span>
-					${sectionBadges.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
-				</div>
-				<div style="font-size:11px;color:#64748b">
-					opacity:${parseFloat(cs.opacity)}
-					${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
-					${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
-				</div>
-			</div>
-			<div class="ftsi-ctrls">
-				<input type="number" step="1" placeholder="z-index" value="${Number.isFinite(getZIndex(section, cs)) ? getZIndex(section, cs) : ''}" data-act="z" />
-				<button class="ftsi-btn" data-act="z-1">z–</button>
-				<button class="ftsi-btn" data-act="z+1">z+</button>
-				<input type="number" step="1" placeholder="order" value="${getCachedStyle(section, 'order') || ''}" data-act="order" />
-				<button class="ftsi-btn" data-act="o-1">o–</button>
-				<button class="ftsi-btn" data-act="o+1">o+</button>
-				<button class="ftsi-btn" data-act="highlight">Destacar</button>
-				<button class="ftsi-btn" data-act="focus">Enfocar</button>
-				<button class="ftsi-btn" data-act="reset">Reset</button>
-			</div>
-		`;
-		
-		// Event listeners para controles
-		modal.addEventListener('click', (e) => {
-			const btn = e.target.closest('[data-act]');
-			if(!btn) return;
-			
-			const act = btn.dataset.act;
-			if(act === 'highlight'){ highlight(section); return; }
-			if(act === 'focus'){ focusOnElement(section); modal.remove(); return; }
-			if(act === 'reset'){ resetOne(section); render(); return; }
-			if(act === 'z'){
-				const v = Number(btn.value);
-				if(Number.isFinite(v)){ setZ(section, v); render(); }
-				return;
-			}
-			if(act === 'order'){
-				const v = Number(btn.value);
-				if(Number.isFinite(v)){ setOrder(section, v); render(); }
-				return;
-			}
-			if(act === 'z-1'){ bumpZ(section, -1); render(); return; }
-			if(act === 'z+1'){ bumpZ(section, +1); render(); return; }
-			if(act === 'o-1'){ bumpOrder(section, -1); render(); return; }
-			if(act === 'o+1'){ bumpOrder(section, +1); render(); return; }
-		});
-		
-		document.body.appendChild(modal);
-	}
 
 	// Crear item de elemento individual
 	function createElementItem(el){
 		const li = document.createElement('li');
 		li.className = 'ftsi-item';
+		
+		// Calcular profundidad para color de fondo
+		let depth = 0;
+		let parent = el.parentElement;
+		while(parent && parent !== document.body){
+			depth++;
+			parent = parent.parentElement;
+		}
+		
+		// Aplicar color de fondo según profundidad
+		const depthColors = [
+			'background: white',                    // L0 (elemento raíz)
+			'background: #fafbfc',                  // L1
+			'background: #f8f9fa',                  // L2
+			'background: #f1f3f4',                  // L3
+			'background: #e8eaed',                  // L4
+			'background: #dadce0'                   // L5+
+		];
+		const depthColor = depthColors[Math.min(depth, depthColors.length - 1)];
+		li.style.cssText = depthColor;
 		
 		const cs = getCachedStyle(el);
 		const paintInfo = STATE.tree.paintOrder.get(el);
