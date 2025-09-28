@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.4
+ * Version:     0.2.5
  * Author:      Flowtitude
  */
 
@@ -560,8 +560,12 @@ add_action('wp_enqueue_scripts', function () {
 	function renderWithReordering(){
 		if(!$list || !STATE.tree) return;
 		
-		// Preservar estado de expansión
+		// Preservar estado de expansión y posición del scroll
 		const expandedSections = new Set(STATE.expandedSections);
+		const scrollTop = $list.scrollTop;
+		
+		// Limpiar caché para obtener valores actualizados
+		clearCache();
 		
 		// Recalcular orden de pintura siempre
 		STATE.tree.paintOrder = calculatePaintOrder(STATE.tree.root);
@@ -722,8 +726,13 @@ add_action('wp_enqueue_scripts', function () {
 			$list.appendChild(li);
 		}
 		
-		// Restaurar estado de expansión
+		// Restaurar estado de expansión y posición del scroll
 		STATE.expandedSections = expandedSections;
+		
+		// Restaurar posición del scroll después de un pequeño delay
+		setTimeout(() => {
+			if($list) $list.scrollTop = scrollTop;
+		}, 10);
 	}
 
 	function setZ(el, v){
@@ -733,6 +742,8 @@ add_action('wp_enqueue_scripts', function () {
 		// No llamar render() aquí para evitar bucles infinitos
 	}
 	function bumpZ(el, delta){
+		// Limpiar caché específico de este elemento para obtener el valor actual
+		STATE.cache.delete(el);
 		const cs = getCachedStyle(el);
 		const curr = cs.zIndex === 'auto' ? 0 : Number(cs.zIndex)||0;
 		setZ(el, curr + delta);
@@ -743,6 +754,8 @@ add_action('wp_enqueue_scripts', function () {
 		STATE.mods.set(el, { ...(STATE.mods.get(el)||{}), order: { prev, now: v } });
 	}
 	function bumpOrder(el, delta){
+		// Limpiar caché específico de este elemento para obtener el valor actual
+		STATE.cache.delete(el);
 		const cs = getCachedStyle(el);
 		const curr = Number(cs.order)||0;
 		setOrder(el, curr + delta);
@@ -853,13 +866,27 @@ add_action('wp_enqueue_scripts', function () {
 		let paintIndex = 0;
 
 		function walkContexts(ctx, depth = 0){
-			// Pintar nodos de este contexto en orden
-			ctx.nodes.forEach(node => {
+			// Ordenar nodos por z-index antes de asignar índice de pintura
+			const sortedNodes = [...ctx.nodes].sort((a, b) => {
+				// Obtener z-index actual (puede haber cambiado)
+				const csA = getCachedStyle(a.el);
+				const csB = getCachedStyle(b.el);
+				const zA = csA.zIndex === 'auto' ? 0 : Number(csA.zIndex) || 0;
+				const zB = csB.zIndex === 'auto' ? 0 : Number(csB.zIndex) || 0;
+				
+				if(zA !== zB) return zA - zB;
+				
+				// Si z-index es igual, mantener orden DOM
+				return a.domIndex - b.domIndex;
+			});
+			
+			// Pintar nodos de este contexto en orden corregido
+			sortedNodes.forEach(node => {
 				paintOrder.set(node.el, {
 					index: paintIndex++,
 					depth: depth,
 					context: ctx.label,
-					zIndex: node.zIndex
+					zIndex: getZIndex(node.el, getCachedStyle(node.el))
 				});
 			});
 
@@ -875,6 +902,8 @@ add_action('wp_enqueue_scripts', function () {
 
 	// Recargar contenido de secciones expandidas con nuevo orden
 	function reloadExpandedSections(){
+		const scrollTop = $list.scrollTop;
+		
 		const sections = getMainSections();
 		sections.forEach((section, index) => {
 			const sectionId = section.id || `section-${index}`;
@@ -888,6 +917,11 @@ add_action('wp_enqueue_scripts', function () {
 				}
 			}
 		});
+		
+		// Restaurar posición del scroll
+		setTimeout(() => {
+			if($list) $list.scrollTop = scrollTop;
+		}, 10);
 	}
 
 	// Renderizar vista de sections colapsadas
