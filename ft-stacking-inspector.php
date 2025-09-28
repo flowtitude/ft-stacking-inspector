@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.5
+ * Version:     0.2.6
  * Author:      Flowtitude
  */
 
@@ -908,13 +908,10 @@ add_action('wp_enqueue_scripts', function () {
 		sections.forEach((section, index) => {
 			const sectionId = section.id || `section-${index}`;
 			if(STATE.expandedSections.has(sectionId)){
-				// Limpiar contenido existente
-				const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
-				if(childrenEl) {
-					childrenEl.innerHTML = '';
-					// Recargar con nuevo orden
-					loadSectionContent(sectionId, section);
-				}
+				// Remover elementos hijos existentes
+				removeSectionChildren(sectionId);
+				// Mostrar elementos hijos con nuevo orden
+				showSectionChildren(sectionId, section);
 			}
 		});
 		
@@ -929,113 +926,149 @@ add_action('wp_enqueue_scripts', function () {
 		const sections = getMainSections();
 		const mainRoot = findMainRoot();
 		
-		// Mostrar información del main root
-		const mainInfo = document.createElement('li');
-		mainInfo.className = 'ftsi-item';
-		const mainSelector = shortSelector(mainRoot);
-		const mainPaintInfo = STATE.tree.paintOrder.get(mainRoot);
+		// Crear lista de elementos: main root + sections + otros elementos
+		const allElements = [mainRoot, ...sections];
 		
-		mainInfo.innerHTML = `
-			<div class="ftsi-top">
-				<div class="ftsi-selector">
-					${mainSelector}
-					${mainPaintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${mainPaintInfo.index}">P#${mainPaintInfo.index}</span>` : ''}
-				</div>
-				<span class="ftsi-badges">
-					<span class="ftsi-badge">main-root</span>
-					<span class="ftsi-badge ftsi-muted">${sections.length} sections</span>
-				</span>
-			</div>
-		`;
-		$list.appendChild(mainInfo);
-
-		// Mostrar cada section
-		sections.forEach((section, index) => {
-			const sectionItem = document.createElement('li');
-			sectionItem.className = 'ftsi-section-item';
+		// Obtener todos los elementos del main root que no sean sections directas
+		const otherElements = Array.from(mainRoot.querySelectorAll('*')).filter(el => 
+			shouldShowElement(el) && 
+			!sections.includes(el) && 
+			!sections.some(section => section.contains(el))
+		);
+		
+		allElements.push(...otherElements);
+		
+		// Ordenar todos los elementos por orden de pintura
+		allElements.sort((a, b) => {
+			const paintA = STATE.tree.paintOrder.get(a);
+			const paintB = STATE.tree.paintOrder.get(b);
 			
-			const paintInfo = STATE.tree.paintOrder.get(section);
-			const sectionId = section.id || `section-${index}`;
-			const isExpanded = STATE.expandedSections.has(sectionId);
+			if(!paintA && !paintB) return 0;
+			if(!paintA) return 1;
+			if(!paintB) return -1;
 			
-			// Contar TODOS los descendientes
-			const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
-			
-			sectionItem.innerHTML = `
-				<div class="ftsi-section-header" data-section-id="${sectionId}">
-					<div class="ftsi-section-title">
-						${shortSelector(section)}
-						${paintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
-					</div>
-					<button class="ftsi-section-toggle" data-section-id="${sectionId}">
-						${allDescendants.length}${isExpanded ? '▼' : '▶'}
-					</button>
-				</div>
-				<div class="ftsi-section-content ${isExpanded ? 'expanded' : ''}" data-section-content="${sectionId}">
-					<!-- Elementos hijos -->
-					<div class="ftsi-section-children" style="display:none">
-						<!-- Contenido se cargará aquí -->
-					</div>
-				</div>
-			`;
-			
-			// Event listeners
-			sectionItem.addEventListener('click', (e) => {
-				const btn = e.target.closest('.ftsi-section-toggle');
-				const header = e.target.closest('.ftsi-section-header');
+			return paintA.index - paintB.index;
+		});
+		
+		// Renderizar cada elemento en orden de pintura
+		allElements.forEach((element, index) => {
+			if(element === mainRoot){
+				// Main root como elemento especial
+				const mainInfo = document.createElement('li');
+				mainInfo.className = 'ftsi-item';
+				const mainSelector = shortSelector(mainRoot);
+				const mainPaintInfo = STATE.tree.paintOrder.get(mainRoot);
 				
-				if(btn || header){
-					const sectionId = (btn || header).dataset.sectionId;
-					toggleSection(sectionId, section);
+				mainInfo.innerHTML = `
+					<div class="ftsi-top">
+						<div class="ftsi-selector">
+							${mainSelector}
+							${mainPaintInfo ? `<span class="ftsi-paint-order" title="Orden de pintura: ${mainPaintInfo.index}">P#${mainPaintInfo.index}</span>` : ''}
+						</div>
+						<span class="ftsi-badges">
+							<span class="ftsi-badge">main-root</span>
+							<span class="ftsi-badge ftsi-muted">${sections.length} sections</span>
+						</span>
+					</div>
+				`;
+				$list.appendChild(mainInfo);
+			} else if(sections.includes(element)){
+				// Section como elemento normal con funcionalidad de expandir
+				const sectionItem = document.createElement('li');
+				sectionItem.className = 'ftsi-item';
+				
+				const paintInfo = STATE.tree.paintOrder.get(element);
+				const sectionId = element.id || `section-${sections.indexOf(element)}`;
+				const isExpanded = STATE.expandedSections.has(sectionId);
+				
+				// Contar TODOS los descendientes
+				const allDescendants = Array.from(element.querySelectorAll('*')).filter(shouldShowElement);
+				
+				const cs = getCachedStyle(element);
+				const bad = [];
+				if(createsStackingContext(element, cs)) bad.push('ctx');
+				if(cs.position && cs.position !== 'static') bad.push(cs.position);
+				if(isFlexItem(element)) bad.push('flex-item');
+				if(isGridItem(element)) bad.push('grid-item');
+				if(isFlexContainer(element)) bad.push('flex-container');
+				if(isGridContainer(element)) bad.push('grid-container');
+				bad.push('section');
+
+				const selectorParts = getSelectorParts(element);
+				const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
+
+				sectionItem.innerHTML = `
+					<div class="ftsi-top">
+						<div class="ftsi-selector">
+							${selectorParts.main}
+							${paintInfo ? `<span class="ftsi-paint-order ${paintOrderClass}" title="Orden de pintura: ${paintInfo.index}">P#${paintInfo.index}</span>` : ''}
+						</div>
+						${selectorParts.extra ? `<div class="ftsi-classes">${selectorParts.extra}</div>` : ''}
+						<span class="ftsi-badges">
+							<span class="ftsi-badge">z:${getZIndex(element, cs)}</span>
+							${bad.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
+						</span>
+					</div>
+					<div class="ftsi-ctrls">
+						<button class="ftsi-btn" data-act="z-1">z–</button>
+						<button class="ftsi-btn" data-act="z+1">z+</button>
+						<button class="ftsi-btn" data-act="o-1">o–</button>
+						<button class="ftsi-btn" data-act="o+1">o+</button>
+						<button class="ftsi-btn" data-act="highlight">Destacar</button>
+						<button class="ftsi-btn" data-act="focus">Enfocar</button>
+						<button class="ftsi-btn" data-act="reset">Reset</button>
+						<button class="ftsi-btn" data-act="toggle-section" data-section-id="${sectionId}">
+							${allDescendants.length}${isExpanded ? '▼' : '▶'}
+						</button>
+					</div>
+					<div class="ftsi-values">
+						<span class="ftsi-value">z-index: ${Number.isFinite(getZIndex(element, cs)) ? getZIndex(element, cs) : 'auto'}</span>
+						<span class="ftsi-value">order: ${getCachedStyle(element, 'order') || '0'}</span>
+					</div>
+				`;
+				
+				// Event listeners
+				sectionItem.addEventListener('click', (e) => {
+					const btn = e.target.closest('button');
+					if(!btn) return;
+					const act = btn.dataset.act;
+					if(act === 'highlight'){ highlight(element); return; }
+					if(act === 'focus'){ focusOnElement(element); return; }
+					if(act === 'reset'){ resetOne(element); renderWithReordering(); return; }
+					if(act === 'z-1'){ bumpZ(element, -1); renderWithReordering(); return; }
+					if(act === 'z+1'){ bumpZ(element, +1); renderWithReordering(); return; }
+					if(act === 'o-1'){ bumpOrder(element, -1); renderWithReordering(); return; }
+					if(act === 'o+1'){ bumpOrder(element, +1); renderWithReordering(); return; }
+					if(act === 'toggle-section'){
+						toggleSection(sectionId, element);
+						return;
+					}
+				});
+				
+				$list.appendChild(sectionItem);
+				
+				// Si está expandida, mostrar elementos hijos después
+				if(isExpanded){
+					showSectionChildren(sectionId, element);
 				}
-			});
-			
-			$list.appendChild(sectionItem);
-			
-			// Si está expandida, cargar contenido
-			if(isExpanded){
-				loadSectionContent(sectionId, section);
+			} else {
+				// Otros elementos como elementos normales
+				const elementItem = createElementItem(element);
+				$list.appendChild(elementItem);
 			}
 		});
 		
 		// Actualizar contador
 		const $count = document.querySelector('[data-count]');
-		if($count) $count.textContent = `${sections.length} sections`;
+		if($count) $count.textContent = `${allElements.length} elementos`;
 	}
 
-	// Alternar sección expandida/colapsada
-	function toggleSection(sectionId, section){
-		const isExpanded = STATE.expandedSections.has(sectionId);
-		const contentEl = document.querySelector(`[data-section-content="${sectionId}"]`);
-		const toggleBtn = document.querySelector(`[data-section-id="${sectionId}"] .ftsi-section-toggle`);
-		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
-		
-		// Contar TODOS los descendientes
+	// Mostrar elementos hijos de una sección después de la sección
+	function showSectionChildren(sectionId, section){
+		// Encontrar TODOS los descendientes de la section
 		const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
 		
-		if(isExpanded){
-			STATE.expandedSections.delete(sectionId);
-			contentEl.classList.remove('expanded');
-			toggleBtn.innerHTML = `${allDescendants.length} ▶`;
-			if(childrenEl) childrenEl.style.display = 'none';
-		} else {
-			STATE.expandedSections.add(sectionId);
-			contentEl.classList.add('expanded');
-			toggleBtn.innerHTML = `${allDescendants.length} ▼`;
-			if(childrenEl) childrenEl.style.display = 'block';
-			loadSectionContent(sectionId, section);
-		}
-	}
-
-	// Cargar contenido de una sección
-	function loadSectionContent(sectionId, section){
-		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
-		if(!childrenEl) return;
-		
-		// Encontrar TODOS los descendientes de la section (no solo hijos directos)
-		const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
-		
-		// ORDENAR por orden de pintura
+		// Ordenar por orden de pintura
 		allDescendants.sort((a, b) => {
 			const paintA = STATE.tree.paintOrder.get(a);
 			const paintB = STATE.tree.paintOrder.get(b);
@@ -1047,11 +1080,53 @@ add_action('wp_enqueue_scripts', function () {
 			return paintA.index - paintB.index;
 		});
 		
+		// Encontrar la posición de la sección en la lista
+		const sectionItem = document.querySelector(`[data-act="toggle-section"][data-section-id="${sectionId}"]`).closest('li');
+		if(!sectionItem) return;
+		
+		// Insertar elementos hijos después de la sección
+		let nextSibling = sectionItem.nextElementSibling;
 		allDescendants.forEach(descendant => {
 			const childItem = createElementItem(descendant);
-			childrenEl.appendChild(childItem);
+			sectionItem.parentNode.insertBefore(childItem, nextSibling);
 		});
 	}
+
+	// Alternar sección expandida/colapsada
+	function toggleSection(sectionId, section){
+		const isExpanded = STATE.expandedSections.has(sectionId);
+		const toggleBtn = document.querySelector(`[data-act="toggle-section"][data-section-id="${sectionId}"]`);
+		
+		// Contar TODOS los descendientes
+		const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
+		
+		if(isExpanded){
+			STATE.expandedSections.delete(sectionId);
+			toggleBtn.innerHTML = `${allDescendants.length} ▶`;
+			// Remover elementos hijos
+			removeSectionChildren(sectionId);
+		} else {
+			STATE.expandedSections.add(sectionId);
+			toggleBtn.innerHTML = `${allDescendants.length} ▼`;
+			// Mostrar elementos hijos
+			showSectionChildren(sectionId, section);
+		}
+	}
+
+	// Remover elementos hijos de una sección
+	function removeSectionChildren(sectionId){
+		const sectionItem = document.querySelector(`[data-act="toggle-section"][data-section-id="${sectionId}"]`).closest('li');
+		if(!sectionItem) return;
+		
+		// Remover elementos hijos hasta encontrar otra sección o el final
+		let nextSibling = sectionItem.nextElementSibling;
+		while(nextSibling && !nextSibling.querySelector('[data-act="toggle-section"]')){
+			const toRemove = nextSibling;
+			nextSibling = nextSibling.nextElementSibling;
+			toRemove.remove();
+		}
+	}
+
 
 
 	// Crear item de elemento individual
