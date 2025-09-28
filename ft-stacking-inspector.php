@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.3
+ * Version:     0.2.4
  * Author:      Flowtitude
  */
 
@@ -572,36 +572,17 @@ add_action('wp_enqueue_scripts', function () {
 			return;
 		}
 		
-		// Recalcular orden de pintura
-		STATE.tree.paintOrder = calculatePaintOrder(STATE.tree.root);
-		
-		$list.innerHTML = '';
-
-		let items = [];
-
-		// Mostrar/ocultar breadcrumb y filtro
+		// Si hay filtro activo, usar la lógica de filtrado normal pero con reordenamiento
 		if(STATE.filteredRoot){
+			// Construir breadcrumb
+			$breadcrumb.innerHTML = STATE.filteredPath.map((item, i) => 
+				`<span class="ftsi-breadcrumb-item" data-path-index="${i}">${item.label}</span>`
+			).join('<span class="ftsi-breadcrumb-separator"> › </span>');
+			
 			$breadcrumb.style.display = 'flex';
 			$filterInfo.style.display = 'block';
 			$showAllBtn.style.display = 'inline-block';
-			
-			// Construir breadcrumb
-			$breadcrumb.innerHTML = STATE.filteredPath.map((item, i) => 
-				`<span class="ftsi-breadcrumb-item" data-level="${i}">${item.label}</span>`
-			).join('<span class="ftsi-breadcrumb-separator">›</span>');
-			
-			// Construir breadcrumb event listeners
-			$breadcrumb.querySelectorAll('.ftsi-breadcrumb-item').forEach((item, i) => {
-				item.addEventListener('click', () => {
-					if(i === 0){
-						showAll();
-					} else {
-						focusOnElement(STATE.filteredPath[i].element);
-					}
-				});
-			});
-			
-			$filterInfo.textContent = `Viendo descendientes de: ${shortSelector(STATE.filteredRoot)}`;
+			$filterInfo.textContent = `Mostrando descendientes de: ${shortSelector(STATE.filteredRoot)}`;
 		} else {
 			$breadcrumb.style.display = 'none';
 			$filterInfo.style.display = 'none';
@@ -609,25 +590,39 @@ add_action('wp_enqueue_scripts', function () {
 		}
 
 		// Recopilar elementos según filtro
-		const ctxRoot = STATE.tree.root;
-		if(STATE.filteredRoot){
-			items = Array.from(STATE.filteredRoot.querySelectorAll('*')).filter(el => 
-				isDescendantOf(el, STATE.filteredRoot) && shouldShowElement(el)
-			).map(el => analyze(el));
+		let items = [];
+		if(STATE.currentTab === 'dom'){
+			items = STATE.tree.domNodes.slice();
 		} else {
-			const walkContexts = (ctx) => {
-				if(ctx.elements){
-					ctx.elements.forEach(el => {
-						if(shouldShowElement(el)) items.push(analyze(el));
-						walkContexts(el);
-					});
-				}
-			};
-			walkContexts(ctxRoot);
+			const out = [];
+			(function walk(ctx, depth=0){
+				out.push({ctx, depth, isCtx:true});
+				ctx.nodes.forEach(n=> out.push({ ...n, depth, isCtx:false }));
+				ctx.children.forEach(c=> walk(c, depth+1));
+			})(STATE.tree.root);
+			items = out;
 		}
 
-		// ORDENAR por orden de pintura (paint order)
+		// Filtrar por nodo raíz si está activo
+		if(STATE.filteredRoot){
+			items = items.filter(item => {
+				if(item.isCtx) return true; // Siempre mostrar contextos
+				return item.el === STATE.filteredRoot || isDescendantOf(item.el, STATE.filteredRoot);
+			});
+		}
+
+		const q = ($search?.value || '').trim().toLowerCase();
+		if(q){
+			items = items.filter(it=>{
+				if(it.isCtx) return it.ctx.label.toLowerCase().includes(q);
+				return it.selector.toLowerCase().includes(q);
+			});
+		}
+
+		// ORDENAR por orden de pintura (solo elementos, no contextos)
 		items.sort((a, b) => {
+			if(a.isCtx || b.isCtx) return 0; // No reordenar contextos
+			
 			const paintA = STATE.tree.paintOrder.get(a.el);
 			const paintB = STATE.tree.paintOrder.get(b.el);
 			
@@ -638,23 +633,51 @@ add_action('wp_enqueue_scripts', function () {
 			return paintA.index - paintB.index;
 		});
 
+		$list.innerHTML = '';
+
+		const count = items.filter(i=>!i.isCtx).length;
+		const totalCount = STATE.tree.domNodes.length;
+		if($count) {
+			if(STATE.filteredRoot){
+				$count.textContent = `${count} de ${totalCount}`;
+			} else {
+				$count.textContent = String(count);
+			}
+		}
+
 		// Renderizar elementos ordenados
-		items.forEach((it, i) => {
+		for(const it of items){
+			if(it.isCtx){
+				const li = document.createElement('li');
+				li.className = 'ftsi-item';
+				li.innerHTML = `
+					<div class="ftsi-top">
+						<strong>CTX</strong>
+						<span class="ftsi-muted">${'— '.repeat(it.depth)}${it.ctx.label}</span>
+						<span class="ftsi-badges">
+							<span class="ftsi-badge">stacking context</span>
+						</span>
+					</div>
+				`;
+				$list.appendChild(li);
+				continue;
+			}
+			
 			const li = document.createElement('li');
 			li.className = 'ftsi-item';
-			it.domIndex = i;
 			
-			const paintInfo = STATE.tree.paintOrder.get(it.el);
-			const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
-			const selectorParts = getSelectorParts(it.el);
 			const bad = [];
-			if(it.createsStackingContext) bad.push('ctx');
-			if(it.position && it.position !== 'static') bad.push(it.position);
+			if(it.createsCtx) bad.push('ctx');
+			if(it.position && it.position!=='static') bad.push(it.position);
 			if(it.isFlexItem) bad.push('flex-item');
 			if(it.isGridItem) bad.push('grid-item');
 			if(isFlexContainer(it.el)) bad.push('flex-container');
 			if(isGridContainer(it.el)) bad.push('grid-container');
-			
+
+			const selectorParts = getSelectorParts(it.el);
+			const paintInfo = STATE.tree.paintOrder.get(it.el);
+			const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
+
 			li.innerHTML = `
 				<div class="ftsi-top">
 					<div class="ftsi-selector">
@@ -681,11 +704,6 @@ add_action('wp_enqueue_scripts', function () {
 					<span class="ftsi-value">z-index: ${Number.isFinite(it.zIndex)? it.zIndex : 'auto'}</span>
 					<span class="ftsi-value">order: ${getCachedStyle(it.el, 'order') || '0'}</span>
 				</div>
-				<div class="ftsi-small ftsi-muted">
-					opacity:${it.opacity}
-					${paintInfo ? ` • pintado: ${paintInfo.index}°` : ''}
-					${paintInfo ? ` • contexto: ${paintInfo.context}` : ''}
-				</div>
 			`;
 			
 			// Event listeners
@@ -702,11 +720,7 @@ add_action('wp_enqueue_scripts', function () {
 				if(act === 'o+1'){ bumpOrder(it.el, +1); renderWithReordering(); return; }
 			});
 			$list.appendChild(li);
-		});
-		
-		// Actualizar contador
-		const $count = document.querySelector('[data-count]');
-		if($count) $count.textContent = `${items.length} elementos`;
+		}
 		
 		// Restaurar estado de expansión
 		STATE.expandedSections = expandedSections;
@@ -716,11 +730,7 @@ add_action('wp_enqueue_scripts', function () {
 		const prev = el.style.zIndex;
 		el.style.setProperty('z-index', String(v), 'important');
 		STATE.mods.set(el, { ...(STATE.mods.get(el)||{}), zIndex: { prev, now: v } });
-		// Recalcular orden de pintura después de cambiar z-index
-		setTimeout(() => {
-			STATE.tree.paintOrder = calculatePaintOrder(STATE.tree.root);
-			render();
-		}, 10);
+		// No llamar render() aquí para evitar bucles infinitos
 	}
 	function bumpZ(el, delta){
 		const cs = getCachedStyle(el);
@@ -871,10 +881,11 @@ add_action('wp_enqueue_scripts', function () {
 			if(STATE.expandedSections.has(sectionId)){
 				// Limpiar contenido existente
 				const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
-				if(childrenEl) childrenEl.innerHTML = '';
-				
-				// Recargar con nuevo orden
-				loadSectionContent(sectionId, section);
+				if(childrenEl) {
+					childrenEl.innerHTML = '';
+					// Recargar con nuevo orden
+					loadSectionContent(sectionId, section);
+				}
 			}
 		});
 	}
@@ -985,29 +996,27 @@ add_action('wp_enqueue_scripts', function () {
 	// Cargar contenido de una sección
 	function loadSectionContent(sectionId, section){
 		const childrenEl = document.querySelector(`[data-section-content="${sectionId}"] .ftsi-section-children`);
-		if(childrenEl && childrenEl.children.length > 0) return; // Ya cargado
+		if(!childrenEl) return;
 		
-		if(childrenEl){
-			// Encontrar TODOS los descendientes de la section (no solo hijos directos)
-			const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
+		// Encontrar TODOS los descendientes de la section (no solo hijos directos)
+		const allDescendants = Array.from(section.querySelectorAll('*')).filter(shouldShowElement);
+		
+		// ORDENAR por orden de pintura
+		allDescendants.sort((a, b) => {
+			const paintA = STATE.tree.paintOrder.get(a);
+			const paintB = STATE.tree.paintOrder.get(b);
 			
-			// ORDENAR por orden de pintura
-			allDescendants.sort((a, b) => {
-				const paintA = STATE.tree.paintOrder.get(a);
-				const paintB = STATE.tree.paintOrder.get(b);
-				
-				if(!paintA && !paintB) return 0;
-				if(!paintA) return 1;
-				if(!paintB) return -1;
-				
-				return paintA.index - paintB.index;
-			});
+			if(!paintA && !paintB) return 0;
+			if(!paintA) return 1;
+			if(!paintB) return -1;
 			
-			allDescendants.forEach(descendant => {
-				const childItem = createElementItem(descendant);
-				childrenEl.appendChild(childItem);
-			});
-		}
+			return paintA.index - paintB.index;
+		});
+		
+		allDescendants.forEach(descendant => {
+			const childItem = createElementItem(descendant);
+			childrenEl.appendChild(childItem);
+		});
 	}
 
 
@@ -1075,7 +1084,6 @@ add_action('wp_enqueue_scripts', function () {
 				<span class="ftsi-value">z-index: ${Number.isFinite(getZIndex(el, cs)) ? getZIndex(el, cs) : 'auto'}</span>
 				<span class="ftsi-value">order: ${getCachedStyle(el, 'order') || '0'}</span>
 			</div>
-			<div class="ftsi-small ftsi-muted">
 		`;
 		
 		// Event listeners
