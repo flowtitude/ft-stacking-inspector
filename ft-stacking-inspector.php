@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FT Stacking Inspector (MVP)
  * Description: Panel flotante para inspeccionar y ajustar en vivo orden de apilamiento (stacking) y z-index / order. Toggle: Alt/Option + Z.
- * Version:     0.2.6
+ * Version:     0.2.7
  * Author:      Flowtitude
  */
 
@@ -82,6 +82,8 @@ add_action('wp_enqueue_scripts', function () {
 	.ftsi-section-info{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
 	.ftsi-section-badges{display:flex;gap:4px;flex-wrap:wrap}
 	.ftsi-section-details{font-size:11px;color:#64748b;line-height:1.3}
+	.ftsi-item.ftsi-behind{opacity:0.6;border-left:3px solid #ef4444;background:#fef2f2}
+	.ftsi-item.ftsi-behind:hover{opacity:0.8}
 	`;
 
 	let $root, $card, $list, $search, $tabStack, $tabDom, $count, $resetBtn, $breadcrumb, $filterInfo, $showAllBtn;
@@ -996,6 +998,13 @@ add_action('wp_enqueue_scripts', function () {
 
 				const selectorParts = getSelectorParts(element);
 				const paintOrderClass = paintInfo ? (paintInfo.index < 10 ? 'low' : paintInfo.index > 50 ? 'high' : '') : '';
+				
+				// Contar elementos que están detrás de esta sección
+				const elementsBehind = allElements.filter(el => {
+					if(el === element || !sections.includes(el)) return false;
+					const elPaint = STATE.tree.paintOrder.get(el);
+					return elPaint && elPaint.index < paintInfo.index;
+				});
 
 				sectionItem.innerHTML = `
 					<div class="ftsi-top">
@@ -1007,6 +1016,7 @@ add_action('wp_enqueue_scripts', function () {
 						<span class="ftsi-badges">
 							<span class="ftsi-badge">z:${getZIndex(element, cs)}</span>
 							${bad.map(b=>`<span class="ftsi-badge">${b}</span>`).join('')}
+							${elementsBehind.length > 0 ? `<span class="ftsi-badge" style="background:#ef4444;color:white" title="Elementos detrás: ${elementsBehind.map(e => shortSelector(e)).join(', ')}">detrás: ${elementsBehind.length}</span>` : ''}
 						</span>
 					</div>
 					<div class="ftsi-ctrls">
@@ -1054,6 +1064,22 @@ add_action('wp_enqueue_scripts', function () {
 			} else {
 				// Otros elementos como elementos normales
 				const elementItem = createElementItem(element);
+				
+				// Verificar si este elemento está detrás de alguna sección
+				const paintInfo = STATE.tree.paintOrder.get(element);
+				if(paintInfo) {
+					const sectionsBehind = sections.filter(section => {
+						const sectionPaint = STATE.tree.paintOrder.get(section);
+						return sectionPaint && sectionPaint.index > paintInfo.index;
+					});
+					
+					if(sectionsBehind.length > 0) {
+						// Añadir indicador visual de que está detrás
+						elementItem.classList.add('ftsi-behind');
+						elementItem.title = `Detrás de: ${sectionsBehind.map(s => shortSelector(s)).join(', ')}`;
+					}
+				}
+				
 				$list.appendChild(elementItem);
 			}
 		});
